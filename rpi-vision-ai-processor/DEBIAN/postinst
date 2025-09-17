@@ -1,0 +1,55 @@
+#!/bin/sh
+set -e
+
+#DEBHELPER#
+
+USER="tedge"
+SERVICES="rpi-vision-ai-processor.service vision-ai-mapper.service"
+
+# Assign user groups
+usermod -aG video,input,render,i2c,spi,gpio,sudo,adm,dialout "$USER"
+echo "User group assigned to user $USER"
+
+# Add sudoers entry
+# Create a dedicated sudoers file for vision-ai
+SUDO_FILE="/etc/sudoers.d/rpi-vision-ai-processor"
+SUDO_LINE='tedge ALL=NOPASSWD: /bin/systemctl restart rpi-vision-ai-processor.service'
+
+echo "$SUDO_LINE" > "$SUDO_FILE"
+chmod 440 "$SUDO_FILE"
+echo "Sudoers entry added for user $USER"
+
+
+# Ensure permissions for plugin, templates, and sm-plugin
+chown -R "$USER":"$USER" /etc/tedge/plugins/vai-plugin
+chown -R "$USER":"$USER" /etc/tedge/operations/c8y/c8y_ImageCapture.template
+chown -R "$USER":"$USER" /etc/tedge/operations/c8y/c8y_ActivateModel.template
+chown -R "$USER":"$USER" /etc/tedge/sm-plugins/rpk
+chmod +x /etc/tedge/sm-plugins/rpk
+
+# Reload systemd and let debhelper handle enable/start
+systemctl --system daemon-reload >/dev/null 2>&1 || true
+
+# Only run if configure action
+if [ "$1" = "configure" ]; then
+    for svc in $SERVICES; do
+        if [ -d /run/systemd/system ]; then
+            # Enable the service at boot
+            systemctl --system enable "$svc" >/dev/null 2>&1 || true
+
+            if systemctl --quiet is-active "$svc"; then
+                systemctl --system restart "$svc" >/dev/null 2>&1 || true
+                echo "Service $svc was running, restarted"
+            else
+                systemctl --system start "$svc" >/dev/null 2>&1 || true
+                echo "Service $svc was not running, started"
+            fi
+        else
+            echo "Systemd not available, skipping $svc"
+        fi
+        sleep 15
+    done
+fi
+
+
+exit 0

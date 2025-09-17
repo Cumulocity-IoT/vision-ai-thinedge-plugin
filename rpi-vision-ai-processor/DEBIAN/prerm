@@ -1,0 +1,12 @@
+#!/bin/bash
+
+for s in "rpi-vision-ai-processor" "vision-ai-mapper"; do
+  deb-systemd-invoke stop ${s}.service
+done
+
+SUDO_FILE="/etc/sudoers.d/rpi-vision-ai-processor"
+case "$1" in
+    remove|purge)
+        rm -f "$SUDO_FILE"
+        ;;
+esac

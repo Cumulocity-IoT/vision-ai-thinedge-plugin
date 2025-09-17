@@ -1,0 +1,27 @@
+[project]
+name = "rpivisionai"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "Cumulocity GmbH"}
+]
+readme = "README.md"
+requires-python = ">=3.9,<3.12"
+dependencies = [
+  "modlib"
+]
+
+[tool.uv.sources]
+modlib={ git= "https://github.com/C8Y-Mario/aitrios-rpi-application-module-library", branch="main" }
+
+[[tool.uv.index]]
+name="pywheel"
+url="https://www.piwheels.org/simple"
+
+[tool.uv]
+#provided as debian dependency
+override-dependencies = [
+  "numpy; sys_platform == 'never'",
+  "requests; sys_platform == 'never'",
+  "opencv-python; sys_platform == 'never'"
+]

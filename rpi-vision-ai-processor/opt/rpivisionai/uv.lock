@@ -1,0 +1,95 @@
+version = 1
+revision = 2
+requires-python = ">=3.9, <3.12"
+
+[manifest]
+overrides = [
+    { name = "numpy", marker = "sys_platform == 'never'" },
+    { name = "requests", marker = "sys_platform == 'never'" },
+]
+
+[[package]]
+name = "certifi"
+version = "2025.1.31"
+source = { registry = "https://www.piwheels.org/simple" }
+wheels = [
+    { url = "https://www.piwheels.org/simple/certifi/certifi-2025.1.31-py3-none-any.whl", hash = "sha256:112e452416b0dfaa7df76b2531ea9e309974916cbb471c502f383a353bc81455" },
+]
+
+[[package]]
+name = "charset-normalizer"
+version = "3.4.1"
+source = { registry = "https://www.piwheels.org/simple" }
+wheels = [
+    { url = "https://www.piwheels.org/simple/charset-normalizer/charset_normalizer-3.4.1-py3-none-any.whl", hash = "sha256:850050ab499b153eba28d0ec937187f0b17221447a3538ef69289c4835c989c8" },
+]
+
+[[package]]
+name = "idna"
+version = "3.10"
+source = { registry = "https://www.piwheels.org/simple" }
+wheels = [
+    { url = "https://www.piwheels.org/simple/idna/idna-3.10-py3-none-any.whl", hash = "sha256:946d195a0d259cbba61165e88e65941f16e9b36ea6ddb97f00452bae8b1287d3" },
+]
+
+[[package]]
+name = "lapx"
+version = "0.5.9"
+source = { registry = "https://www.piwheels.org/simple" }
+dependencies = [
+    { name = "numpy", marker = "sys_platform == 'never'" },
+]
+wheels = [
+    { url = "https://www.piwheels.org/simple/lapx/lapx-0.5.9-cp311-cp311-linux_armv6l.whl", hash = "sha256:72ec9ccd17910c545a98c588795b9d439e8954ad1d2f9e533ab11bfdd52d3913" },
+    { url = "https://www.piwheels.org/simple/lapx/lapx-0.5.9-cp311-cp311-linux_armv7l.whl", hash = "sha256:72ec9ccd17910c545a98c588795b9d439e8954ad1d2f9e533ab11bfdd52d3913" },
+    { url = "https://www.piwheels.org/simple/lapx/lapx-0.5.9-cp39-cp39-linux_armv6l.whl", hash = "sha256:9f9cb79b28a3b356fcbca308d33889e7a0039d2488114f83e6ad0da29c41a9fc" },
+    { url = "https://www.piwheels.org/simple/lapx/lapx-0.5.9-cp39-cp39-linux_armv7l.whl", hash = "sha256:9f9cb79b28a3b356fcbca308d33889e7a0039d2488114f83e6ad0da29c41a9fc" },
+]
+
+[[package]]
+name = "modlib"
+version = "1.0.0"
+source = { git = "https://github.com/C8Y-Mario/aitrios-rpi-application-module-library?branch=feature%2Farmhf-support#af11569c6df8746d30356d1d89823292e0d927b9" }
+dependencies = [
+    { name = "lapx" },
+    { name = "numpy", marker = "sys_platform == 'never'" },
+    { name = "requests", marker = "sys_platform == 'never'" },
+]
+
+[[package]]
+name = "numpy"
+version = "1.26.4"
+source = { registry = "https://www.piwheels.org/simple" }
+
+[[package]]
+name = "requests"
+version = "2.32.3"
+source = { registry = "https://www.piwheels.org/simple" }
+dependencies = [
+    { name = "certifi" },
+    { name = "charset-normalizer" },
+    { name = "idna" },
+    { name = "urllib3" },
+]
+wheels = [
+    { url = "https://www.piwheels.org/simple/requests/requests-2.32.3-py3-none-any.whl", hash = "sha256:41c1576e09f429d8f841b1143f51754df46557f6eb229605898a79b98c311db4" },
+]
+
+[[package]]
+name = "rpivisionai"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "modlib" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "modlib", git = "https://github.com/C8Y-Mario/aitrios-rpi-application-module-library?branch=feature%2Farmhf-support" }]
+
+[[package]]
+name = "urllib3"
+version = "2.3.0"
+source = { registry = "https://www.piwheels.org/simple" }
+wheels = [
+    { url = "https://www.piwheels.org/simple/urllib3/urllib3-2.3.0-py3-none-any.whl", hash = "sha256:c99ebc29115eed3d260db0c65d90d145979cc864b9a454856be6027debde76f5" },
+]

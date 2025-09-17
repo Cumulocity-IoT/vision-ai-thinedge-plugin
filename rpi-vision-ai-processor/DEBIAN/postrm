@@ -1,0 +1,39 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    remove)
+        # Disable service on final removal (preserves user overrides)
+        deb-systemd-helper disable rpi-vision-ai-processor.service >/dev/null || true
+        deb-systemd-helper unmask rpi-vision-ai-processor.service >/dev/null || true
+        deb-systemd-helper disable vision-ai-mapper.service >/dev/null || true
+        deb-systemd-helper unmask vision-ai-mapper.service >/dev/null || true
+        #remove any pycache files
+        if [ -d "/opt/rpivisionai" ]; then
+            # Remove Python bytecode files
+            find /opt/rpivisionai/ -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+            
+            # Remove __pycache__ directories
+            find /opt/rpivisionai/ -type d -name '__pycache__' -exec rm -rf {} +
+        fi
+        # Always reload systemd to clean up dangling units
+        deb-systemd-helper daemon-reload || true
+        ;;
+    purge)
+        # On purge, remove all traces (but still don’t touch /etc)
+        deb-systemd-helper purge rpi-vision-ai-processor.service >/dev/null || true
+        deb-systemd-helper purge vision-ai-mapper.service >/dev/null || true
+        #remove any pycache files
+        if [ -d "/opt/rpivisionai" ]; then
+            # Remove Python bytecode files
+            find /opt/rpivisionai/ -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+            
+            # Remove __pycache__ directories
+            find /opt/rpivisionai/ -type d -name '__pycache__' -exec rm -rf {} +
+        fi
+        # Always reload systemd to clean up dangling units
+        deb-systemd-helper daemon-reload || true
+        ;;
+esac
+
+exit 0

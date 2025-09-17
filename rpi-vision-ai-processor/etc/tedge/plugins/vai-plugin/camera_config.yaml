@@ -1,0 +1,20 @@
+cameras:
+  camera:
+    id: "ai_camera"
+    metadata:
+      model: default
+      framerate: 15
+      threshold: 0.3
+      modeltype: object detection  #either "object detection" or "classification"
+      bbox_normalization: False
+      bbox_order: yx
+      output_order: bscn
+      max_detections: 5
+    tracker:
+      track_thresh: 0.25
+      track_buffer: 30
+      match_thresh: 0.8
+      aspect_ratio_thresh: 3.0
+      min_box_area: 1.0
+      mot20: False
+

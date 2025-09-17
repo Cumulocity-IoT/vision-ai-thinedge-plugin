@@ -1,0 +1,10 @@
+mqtt:
+  broker: "127.0.0.1"
+  port: 1883
+  keepalive: 60
+  topics:
+    base: "imx500"
+    detection: "detection"
+    classification: "classification"
+    status: "CameraServiceStatus"
+  client_id: "imx500_ai_camera_publisher"

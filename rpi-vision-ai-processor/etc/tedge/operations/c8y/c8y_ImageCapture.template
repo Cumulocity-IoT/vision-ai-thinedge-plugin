@@ -1,0 +1,7 @@
+[exec]
+topic = "c8y/devicecontrol/notifications"
+on_fragment = "c8y_ImageCapture"
+
+[exec.workflow]
+operation = "image_capture"
+input = "${.payload}"

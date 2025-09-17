@@ -1,0 +1,17 @@
+[Unit]
+Description=rpi-vision-ai-processor Daemon
+After=xserver.service
+
+[Service]
+Type=simple
+#Environment="DISPLAY=:0"
+#Environment=XAUTHORITY=/home/pi/.Xauthority
+ExecStart=/opt/rpivisionai/.venv/bin/python3 /opt/rpivisionai/rpi_vision_ai_processor.py
+WorkingDirectory=/opt/rpivisionai/
+Restart=always
+User=tedge
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target
