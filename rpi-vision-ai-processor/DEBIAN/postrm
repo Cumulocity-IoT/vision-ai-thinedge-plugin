@@ -12,12 +12,12 @@ case "$1" in
         if [ -d "/opt/rpivisionai" ]; then
             # Remove Python bytecode files
             find /opt/rpivisionai/ -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
-            
+
             # Remove __pycache__ directories
             find /opt/rpivisionai/ -type d -name '__pycache__' -exec rm -rf {} +
         fi
         # Always reload systemd to clean up dangling units
-        systemctl daemon-reload || true
+        systemctl --system daemon-reload >/dev/null 2>&1 || true
         ;;
     purge)
         # On purge, remove all traces (but still don’t touch /etc)
@@ -27,12 +27,12 @@ case "$1" in
         if [ -d "/opt/rpivisionai" ]; then
             # Remove Python bytecode files
             find /opt/rpivisionai/ -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
-            
+
             # Remove __pycache__ directories
             find /opt/rpivisionai/ -type d -name '__pycache__' -exec rm -rf {} +
         fi
         # Always reload systemd to clean up dangling units
-        systemctl daemon-reload || true
+        systemctl --system daemon-reload >/dev/null 2>&1 || true
         ;;
 esac
 

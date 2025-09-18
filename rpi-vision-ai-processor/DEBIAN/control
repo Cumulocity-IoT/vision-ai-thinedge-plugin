@@ -4,5 +4,5 @@ Section: utils
 Priority: optional
 Architecture: all
 Maintainer: vachaspati.diwevedi@cumulocity.com
-Depends: python3, python3-paho-mqtt, systemd, python3-opencv, python3-munkres, python3-numpy, python3-picamera2,imx500-all, python3-yaml, python3-watchdog, unzip
+Depends: python3, python3-paho-mqtt, systemd, python3-opencv, python3-munkres, python3-numpy, python3-picamera2, imx500-all, python3-yaml, python3-watchdog, unzip
 Description: MQTT Subscriber Service for Cumulocity
