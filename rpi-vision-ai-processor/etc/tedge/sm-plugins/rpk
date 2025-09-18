@@ -51,8 +51,8 @@ case "$COMMAND" in
         # Unzip the file
         echo "Unzipping file..."
         unzip -o "$FILE" -d "$TARGET_DIR"
-        echo ${VERSION} > "$TARGET_DIR"/version
-        chown -R "$USER":"$USER" "$TARGET_DIR"
+        echo "${VERSION}" > "$TARGET_DIR"/version
+        chown -R "${USER}:${USER}" "$TARGET_DIR"
 
         echo "Model update completed successfully."
         exit 0
