@@ -4,16 +4,16 @@ set -e
 
 #Argument parsing
 COMMAND="$1"
-shift || true
+shift
 
 MODEL="$1"
-shift || true
+shift
 
 VERSION=""
 FILE=""
 USER="tedge"
 
-while [[ $# -gt 0 ]]; do
+while [ $# -gt 0 ]; do
 	case $1 in
 		--module-version)
 		    VERSION="$2"
@@ -25,7 +25,7 @@ while [[ $# -gt 0 ]]; do
 		    ;;
 		*)
 		    echo "Unknown option: $1" >&2
-		    echo "Usage: $0 --name <name> --module-version <version> --file <path>"
+		    echo "Usage: $0 <name> --module-version <version> --file <path>"
 		    exit 1
 		    ;;
   esac
@@ -40,31 +40,26 @@ case "$COMMAND" in
             # Read the content of version.txt
             v=$(<"${dir}version")
             # Output: foldername<TAB>version
-            echo -e $(basename "${dir}")"\t$v"
+            printf '%s\t%s\n' "$(basename "${dir}")" "$v"
           fi
         done
         exit 0
         ;;
     install)
         TARGET_DIR="${BASE_MODEL_DIR}/${MODEL}"
-        if [ ! -d "$TARGET_DIR" ]; then
-          mkdir -p "$TARGET_DIR"
-        fi
+        mkdir -p "$TARGET_DIR"
         # Unzip the file
         echo "Unzipping file..."
         unzip -o "$FILE" -d "$TARGET_DIR"
-        echo ${VERSION} > "$TARGET_DIR"/version
-        chown -R "$USER":"$USER" "$TARGET_DIR"
+        echo "${VERSION}" > "$TARGET_DIR"/version
+        chown -R "${USER}:${USER}" "$TARGET_DIR"
 
         echo "Model update completed successfully."
         exit 0
         ;;
     remove)
-        TARGET_DIR=${BASE_MODEL_DIR}/${MODEL}
-
-        if [ -d "$TARGET_DIR" ]; then
-          rm -r "$TARGET_DIR"
-        fi
+        TARGET_DIR="${BASE_MODEL_DIR}/${MODEL}"
+        rm -rf "$TARGET_DIR"
         exit 0
         ;;
     prepare)
