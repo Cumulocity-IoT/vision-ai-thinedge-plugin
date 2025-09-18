@@ -7,8 +7,8 @@ ExecStart=/usr/bin/python3 /opt/rpivisionai/vision_ai_mapper.py
 WorkingDirectory=/opt/rpivisionai/
 Restart=always
 User=tedge
-StandardOutput=null
-StandardError=null
+StandardOutput=journal
+StandardError=inherit
 
 [Install]
 WantedBy=multi-user.target
