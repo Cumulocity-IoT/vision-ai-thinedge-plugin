@@ -4,10 +4,10 @@ set -e
 
 #Argument parsing
 COMMAND="$1"
-shift || true
+shift
 
 MODEL="$1"
-shift || true
+shift
 
 VERSION=""
 FILE=""
