@@ -40,7 +40,7 @@ case "$COMMAND" in
             # Read the content of version.txt
             v=$(<"${dir}version")
             # Output: foldername<TAB>version
-            echo -e $(basename "${dir}")"\t$v"
+            printf '%s\t%s\n' "$(basename "${dir}")" "$v"
           fi
         done
         exit 0
