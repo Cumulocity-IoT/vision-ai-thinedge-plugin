@@ -49,7 +49,7 @@ wheels = [
 [[package]]
 name = "modlib"
 version = "1.0.0"
-source = { git = "https://github.com/C8Y-Mario/aitrios-rpi-application-module-library?branch=feature%2Farmhf-support#af11569c6df8746d30356d1d89823292e0d927b9" }
+source = { git = "https://github.com/C8Y-Mario/aitrios-rpi-application-module-library?branch=main" }
 dependencies = [
     { name = "lapx" },
     { name = "numpy", marker = "sys_platform == 'never'" },
@@ -84,7 +84,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "modlib", git = "https://github.com/C8Y-Mario/aitrios-rpi-application-module-library?branch=feature%2Farmhf-support" }]
+requires-dist = [{ name = "modlib", git = "https://github.com/C8Y-Mario/aitrios-rpi-application-module-library?branch=main" }]
 
 [[package]]
 name = "urllib3"
