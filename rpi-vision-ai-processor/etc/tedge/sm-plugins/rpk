@@ -47,9 +47,7 @@ case "$COMMAND" in
         ;;
     install)
         TARGET_DIR="${BASE_MODEL_DIR}/${MODEL}"
-        if [ ! -d "$TARGET_DIR" ]; then
-          mkdir -p "$TARGET_DIR"
-        fi
+        mkdir -p "$TARGET_DIR"
         # Unzip the file
         echo "Unzipping file..."
         unzip -o "$FILE" -d "$TARGET_DIR"
@@ -60,11 +58,8 @@ case "$COMMAND" in
         exit 0
         ;;
     remove)
-        TARGET_DIR=${BASE_MODEL_DIR}/${MODEL}
-
-        if [ -d "$TARGET_DIR" ]; then
-          rm -r "$TARGET_DIR"
-        fi
+        TARGET_DIR="${BASE_MODEL_DIR}/${MODEL}"
+        rm -rf "$TARGET_DIR"
         exit 0
         ;;
     prepare)
