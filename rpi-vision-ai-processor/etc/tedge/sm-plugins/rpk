@@ -13,7 +13,7 @@ VERSION=""
 FILE=""
 USER="tedge"
 
-while [[ $# -gt 0 ]]; do
+while [ $# -gt 0 ]; do
 	case $1 in
 		--module-version)
 		    VERSION="$2"
