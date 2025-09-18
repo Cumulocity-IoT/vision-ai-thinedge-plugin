@@ -17,7 +17,7 @@ case "$1" in
             find /opt/rpivisionai/ -type d -name '__pycache__' -exec rm -rf {} +
         fi
         # Always reload systemd to clean up dangling units
-        systemctl daemon-reload || true
+        systemctl --system daemon-reload >/dev/null 2>&1 || true
         ;;
     purge)
         # On purge, remove all traces (but still don’t touch /etc)
@@ -32,7 +32,7 @@ case "$1" in
             find /opt/rpivisionai/ -type d -name '__pycache__' -exec rm -rf {} +
         fi
         # Always reload systemd to clean up dangling units
-        systemctl daemon-reload || true
+        systemctl --system daemon-reload >/dev/null 2>&1 || true
         ;;
 esac
 
