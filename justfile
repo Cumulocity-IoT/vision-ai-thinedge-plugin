@@ -4,15 +4,15 @@ default: enable-emulation build-all
 
 # Enable QEMU emulation
 enable-emulation:
-    docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+    docker run --privileged --rm tonistiigi/binfmt --install all
 
 # build docker image for ARM32 (armv7l)
 build-arm32-docker:
-    docker build --platform linux/arm -t dockcross-uv-armv7l -f build/Dockerfile.arm build
+    docker buildx build --platform linux/arm/v7 -t dockcross-uv-armv7l -f build/Dockerfile build
 
 # Build for AARCH64
 build-aarch64-docker:
-    docker build --platform linux/aarch64 -t dockcross-uv-aarch64 -f build/Dockerfile.aarch64 build
+    docker buildx build --platform linux/aarch64 -t dockcross-uv-aarch64 -f build/Dockerfile build
 
 build-arm32: build-arm32-docker
     docker run --platform linux/arm/v7 -v {{justfile_directory()}}:/work --rm -it dockcross-uv-armv7l /usr/bin/build.sh
