@@ -12,7 +12,7 @@ case "$1" in
         if [ -d "/opt/rpivisionai" ]; then
             # Remove Python bytecode files
             find /opt/rpivisionai/ -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
-            
+
             # Remove __pycache__ directories
             find /opt/rpivisionai/ -type d -name '__pycache__' -exec rm -rf {} +
         fi
@@ -27,7 +27,7 @@ case "$1" in
         if [ -d "/opt/rpivisionai" ]; then
             # Remove Python bytecode files
             find /opt/rpivisionai/ -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
-            
+
             # Remove __pycache__ directories
             find /opt/rpivisionai/ -type d -name '__pycache__' -exec rm -rf {} +
         fi
