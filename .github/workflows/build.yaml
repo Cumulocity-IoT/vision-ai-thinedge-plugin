@@ -13,8 +13,7 @@ jobs:
       # Install just
       - name: Install just
         run: |
-          curl -sL https://just.systems/install.sh | bash
-          echo "$HOME/.just/bin" >> $GITHUB_PATH
+          curl -sL https://just.systems/install.sh | bash -s -- --to /usr/local/bin
 
       # Build both architectures using the justfile
       - name: Build Debian Packages
@@ -25,4 +24,4 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           name: deb-packages
-          path: dist/*.deb
+          path: temp/dist/*.deb
