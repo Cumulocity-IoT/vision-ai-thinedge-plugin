@@ -17,7 +17,7 @@ jobs:
 
       # Build both architectures using the justfile
       - name: Build Debian Packages
-        run: just build-aarch64
+        run: just
 
       # Upload the .deb packages
       - name: Upload Artifacts
