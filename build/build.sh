@@ -3,7 +3,7 @@
 set -e
 
 export UV_LINK_MODE=copy
-cp -r rpi-vision-ai-processor/ /tmp 
+cp -r rpi-vision-ai-processor/ /tmp
 BUILD_PATH="/tmp/rpi-vision-ai-processor/opt/rpivisionai"
 VENV="$BUILD_PATH/.venv"
 if [ -d "$VENV" ]

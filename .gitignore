@@ -1,0 +1,8 @@
+# build output
+*.deb
+
+# python
+*.pyc
+
+# dotenv files
+*.env
