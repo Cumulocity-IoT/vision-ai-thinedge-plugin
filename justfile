@@ -15,10 +15,10 @@ build-aarch64-docker:
     docker buildx build --platform linux/aarch64 -t dockcross-uv-aarch64 -f build/Dockerfile build
 
 build-arm32: build-arm32-docker
-    docker run --platform linux/arm/v7 -v {{justfile_directory()}}:/work --rm -it dockcross-uv-armv7l /usr/bin/build.sh
+    docker run --platform linux/arm/v7 -v {{justfile_directory()}}:/work --rm dockcross-uv-armv7l /usr/bin/build.sh
 
 # Run build container for AARCH64
 build-aarch64: build-aarch64-docker
-    docker run --platform linux/aarch64 -v {{justfile_directory()}}:/work --rm -it dockcross-uv-aarch64 /usr/bin/build.sh
+    docker run --platform linux/aarch64 -v {{justfile_directory()}}:/work --rm dockcross-uv-aarch64 /usr/bin/build.sh
 
 build-all: build-arm32 build-aarch64
