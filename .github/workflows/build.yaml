@@ -1,0 +1,58 @@
+name: Build and Release Debian Package
+
+on:
+  push:
+    tags:
+      - '*'
+jobs:
+  build-deb:
+    runs-on: ubuntu-latest
+    container:
+      image: debian:bookworm
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential devscripts debhelper fakeroot
+
+      - name: Set Debian package version from git tag
+        id: version
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "TAG=$TAG"
+          # Update debian/changelog with the tag version
+          dch --newversion "$TAG" -b "Release $TAG"
+          echo "DEB_VERSION=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Build Debian package
+        run: |
+          debuild -us -uc
+
+      - name: Collect .deb artifacts
+        run: |
+          mkdir -p artifacts
+          cp ../*.deb artifacts/
+
+      - name: Upload .deb as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: debian-packages
+          path: artifacts/*.deb
+
+  release:
+    needs: build-deb
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download .deb artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: debian-packages
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*.deb
