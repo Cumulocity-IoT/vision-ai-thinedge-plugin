@@ -1,0 +1,15 @@
+Metadata-Version: 2.4
+Name: vision-ai-thinedge-plugin
+Version: 0.1.0
+Summary: Vision AI ThinEdge Plugin with rpi_vision_ai_processor and vision_ai_mapper
+Author: Cumulocity GmbH
+License: MIT
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: numpy
+Requires-Dist: paho-mqtt>=2.0
+Requires-Dist: pyyaml
+Requires-Dist: opencv-python
+Requires-Dist: watchdog
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
