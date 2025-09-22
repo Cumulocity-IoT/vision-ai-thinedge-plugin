@@ -1,8 +1,0 @@
-numpy
-paho-mqtt>=2.0
-pyyaml
-opencv-python
-watchdog
-
-[dev]
-pytest
