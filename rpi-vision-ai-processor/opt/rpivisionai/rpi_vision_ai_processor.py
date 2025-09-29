@@ -31,45 +31,48 @@ from typing import List, Optional
 
 from modlib.models.model import COLOR_FORMAT, MODEL_TYPE, Model
 from modlib.devices.frame import Frame, IMAGE_TYPE
-from modlib.models.results import Classifications, Detections, Poses
+from modlib.models.results import Classifications, Detections, Poses, Segments
 from modlib.models.post_processors import pp_od_bscn, pp_od_bcsn, pp_cls, pp_cls_softmax, pp_posenet, pp_yolo_pose_ultralytics
 from modlib.devices.sources import Images, Video
 from dataclasses import dataclass
 
-LOG_DIR = "/var/log/tedge/vai-plugin"
-USER = "tedge"
-GROUP = "tedge"
-
-def ensure_dir(path, mode=0o755):
-    os.makedirs(path, exist_ok=True)
-    os.chmod(path, mode)
-
-def ensure_keep_file(path, mode=0o644):
-    if not os.path.exists(path):
-        with open(path, "w") as f:
-            f.write("This file is here to ensure the directory exists.\n")
-    os.chmod(path, mode)
-
-ensure_dir(LOG_DIR)
-ensure_keep_file(os.path.join(LOG_DIR, ".keep"))
-
-logging.config.fileConfig('/etc/tedge/plugins/vai-plugin/rpi_vision_ai_processor_logging.conf', disable_existing_loggers=False)
-log = logging.getLogger(__name__)
-log.info("Log rotation setup successfully!")
-log.info(sys.executable)
-
-PLUGIN_CONFIG_FILE= "/etc/tedge/plugins/vai-plugin/plugin_config.yaml"
-CAMERA_CONFIG_FILE= "/etc/tedge/plugins/vai-plugin/camera_config.yaml"
-MODEL_BASE_PATH= "/etc/tedge/plugins/vai-plugin/model"
-
-
 # Configuration
-WATCHED_FILES = [PLUGIN_CONFIG_FILE,CAMERA_CONFIG_FILE]  # List of files to watch
 DAEMON_SERVICE = "rpi-vision-ai-processor.service"  # Change this to your daemon service name
+# Default paths - can be overridden via environment variables or parameters
+DEFAULT_LOG_DIR = "/var/log/tedge/vai-plugin"
+DEFAULT_LOGGING_CONFIG = "/etc/tedge/plugins/vai-plugin/rpi_vision_ai_processor_logging.conf"
+DEFAULT_PLUGIN_CONFIG = "/etc/tedge/plugins/vai-plugin/plugin_config.yaml"
+DEFAULT_CAMERA_CONFIG = "/etc/tedge/plugins/vai-plugin/camera_config.yaml"
+DEFAULT_MODEL_BASE_PATH = "/etc/tedge/plugins/vai-plugin/model"
 
+# Get configurable paths from environment variables or use defaults
+LOG_DIR = os.getenv("VAI_LOG_DIR", DEFAULT_LOG_DIR)
+LOGGING_CONFIG_FILE = os.getenv("VAI_PROCESSOR_LOGGING_CONFIG", DEFAULT_LOGGING_CONFIG)
+PLUGIN_CONFIG_FILE = os.getenv("VAI_PLUGIN_CONFIG", DEFAULT_PLUGIN_CONFIG)
+CAMERA_CONFIG_FILE = os.getenv("VAI_CAMERA_CONFIG", DEFAULT_CAMERA_CONFIG)
+MODEL_BASE_PATH = os.getenv("VAI_MODEL_BASE_PATH", DEFAULT_MODEL_BASE_PATH)
+
+
+def ensure_dir(path):
+    os.makedirs(path, exist_ok=True)
+
+def setup_logging(logging_config_path: str):
+    """Setup logging configuration with parameterizable config file path."""
+    ensure_dir(LOG_DIR)
+
+    if os.path.exists(logging_config_path):
+        logging.config.fileConfig(logging_config_path, disable_existing_loggers=False)
+        log.info("Log rotation setup successfully!")
+    else:
+        # Fallback to basic logging if config file doesn't exist
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+
+log = logging.getLogger(__name__)
 mqtt_client: mqtt.Client
-imx500: IMX500
-intrinsics: NetworkIntrinsics
+
 latest_frame = None
 frame_lock = threading.Lock()
 frame_counter = 0
@@ -146,11 +149,14 @@ def load_config(filename):
 
 #check config file changes
 class FileChangeHandler(FileSystemEventHandler):
+    def __init__(self, watched_files):
+        self.watched_files=watched_files
+
     def on_any_event(self, event):
         path = event.src_path
 
         # Watch for specific config files
-        if path in WATCHED_FILES and event.event_type.upper() == "MODIFIED":
+        if path in self.watched_files and event.event_type.upper() == "MODIFIED":
             log.info(f"[CONFIG FILE] {event.event_type.upper()} detected: {path}")
             publish_service_status(mqtt_client, 'main', f"Config file : {os.path.basename(path)} updated on the Camera.","config_deployed")
             threading.Thread(target=restart_daemon, daemon=True).start()
@@ -159,13 +165,13 @@ def restart_daemon():
     publish_service_status(mqtt_client, 'main', "Camera Service Stopped.","camera_service_stopped")
     subprocess.run(["sudo", "systemctl", "restart", DAEMON_SERVICE], check=True)
 
-def start_watcher():
-    event_handler = FileChangeHandler()
+def start_watcher(watched_files):
+    event_handler = FileChangeHandler(watched_files)
     observer = Observer()
 
-    log.info(f"files to watch: {WATCHED_FILES}")
+    log.info(f"files to watch: {watched_files}")
 
-    for file_path in WATCHED_FILES:
+    for file_path in watched_files:
         if os.path.exists(file_path):
             observer.schedule(event_handler, path=file_path, recursive=False)
         else:
@@ -185,7 +191,14 @@ def init_mqtt(config):
     mqtt_client.on_message = on_message
     mqtt_client.connect(config["mqtt"]["broker"], config["mqtt"]["port"], config["mqtt"]["keepalive"])
     mqtt_client.loop_start()
-    log.info("MQTT client initialized")
+    log.info("MQTT client initialized and connected")
+
+def subscribe_to_topics():
+    """Subscribe to MQTT topics after all initialization is complete."""
+    mqtt_client.subscribe("vai/+/image/+")
+    mqtt_client.subscribe("vai/+/video/+")
+    mqtt_client.subscribe("vai/+/model/activate/+")
+    log.info("Subscribed to MQTT topics")
 
 # Object Detection Logic
 
@@ -194,10 +207,7 @@ def on_connect(client, userdata, flags, rc):
     if rc > 0:
         log.error("Could not connect to MQTT broker")
         exit(1)
-    client.subscribe("vai/+/image/+")
-    client.subscribe("vai/+/video/+")
-    client.subscribe("vai/+/model/activate/+")
-    log.info("Connected MQTT subscriber")
+    log.info("Connected to MQTT broker (subscriptions will be done after initialization)")
 
 def on_message(client, userdata, msg):
     log.info(f"Message received on topic {msg.topic}: {msg.payload.decode()}")
@@ -212,7 +222,7 @@ def on_message(client, userdata, msg):
             if current_config["cameras"][camera].get("id","") == device:
                 current_model = current_config["cameras"][camera]["metadata"]["model"]
                 if current_model != model_name:
-                    activate_model(device, op_id, model_name)
+                    activate_model(device, model_name)
                 else:
                     mqtt_client.publish(f'vai/{device}/model/activate/{op_id}/result', f'{{"status": "successful", "id": "{op_id}", "camera_id": "{device}", "result": "{model_name}"}}')
                     mqtt_client.publish(f'vai/{device}/model/activate/{op_id}', f'', retain=True)
@@ -234,7 +244,7 @@ def on_message(client, userdata, msg):
         start_video_recording(video_match.group(1), video_match.group(2), duration, framerate)
         return
 
-def activate_model(device, op_id, model_name):
+def activate_model(device, model_name):
     """write the model name to the camera.config"""
     new_config = update_camera_config(device, model_name, True)
 
@@ -277,7 +287,7 @@ def parse_detections(camera_config, device, labels, modelType):
     annotator = Annotator(color=ColorPalette.default(), thickness=2, text_thickness=2, text_scale=0.8)
 
     if modelType in ('object detection', 'pose detection'):
-        tracker = BYTETracker(BYTETrackerArgs(**config.get("tracker", {})))  # You can pass tracking config if needed
+        tracker = BYTETracker(BYTETrackerArgs(**camera_config.get("tracker", {})))  # You can pass tracking config if needed
         bbox_normalization = camera_config['metadata'].get('bbox_normalization', False)
         bbox_order = camera_config['metadata'].get('bbox_order', "yx")
     with device as stream:
@@ -325,13 +335,13 @@ def parse_detections(camera_config, device, labels, modelType):
                 }
                 # Convert to JSON string
                 json_string = json.dumps(full_output, indent=2)
-                topic =  config["mqtt"]["topics"]["detection"]
+                topic =  current_config["mqtt"]["topics"]["detection"]
                 if isinstance(detections, Classifications):
-                    topic = config["mqtt"]["topics"]["classification"]
+                    topic = current_config["mqtt"]["topics"]["classification"]
                 # Publih to MQTT
                 mqtt_client.publish(
                     "/".join([
-                        config["mqtt"]["topics"]["base"],
+                        current_config["mqtt"]["topics"]["base"],
                         camera_config["id"],
                         topic,
                         camera_config['metadata']['model']
@@ -347,21 +357,11 @@ def parse_detections(camera_config, device, labels, modelType):
 
 
 def get_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=str, help="Path of the model")
-    parser.add_argument("--fps", type=int,help="Frames per second")
-    parser.add_argument("--bbox-normalization", action=argparse.BooleanOptionalAction, help="Normalize bbox")
-    parser.add_argument("--bbox-order", choices=["yx", "xy"], default="yx",
-                        help="Set bbox order yx -> (y0, x0, y1, x1) xy -> (x0, y0, x1, y1)")
-    parser.add_argument("--threshold", type=float, help="Detection threshold")
-    parser.add_argument("--iou", type=float, help="Set iou threshold")
-    parser.add_argument("--max-detections", type=int, help="Set max detections")
-    parser.add_argument("--ignore-dash-labels", action=argparse.BooleanOptionalAction, help="Remove '-' labels ")
-    parser.add_argument("--postprocess", choices=["", "nanodet"],
-                        default=None, help="Run post process of type")
-    parser.add_argument("-r", "--preserve-aspect-ratio", action=argparse.BooleanOptionalAction,
-                        help="preserve the pixel aspect ratio of the input tensor")
-    parser.add_argument("--labels", type=str, help="Path to the labels file")
+    parser = argparse.ArgumentParser(description='RPI Vision AI Processor Service')
+    parser.add_argument('-p', '--plugin-config', help='Path to plugin configuration file')
+    parser.add_argument('-c', '--camera-config', help='Path to camera configuration file')
+    parser.add_argument('-l', '--logging-config', help='Path to logging configuration file')
+    parser.add_argument('-m', '--model-base-path', help='Base path for AI models')
     return parser.parse_args()
 
 
@@ -400,7 +400,7 @@ def update_camera_config(device: str, model_name: str, overwrite_from_model: boo
     return updated_config
 
 
-def init_plugin_config(args):
+def init_plugin_config():
     global show_preview, is_fullscreen
     # Load both configurations
     plugin_config = load_config(PLUGIN_CONFIG_FILE)
@@ -493,7 +493,7 @@ def get_model_type(model_file,camera_config):
     return intrinsics.task
 
 def start_model(camera_config):
-    global imx500, intrinsics, device
+    global device
 
     model = None
     # update model and labels
@@ -534,10 +534,18 @@ def start_model(camera_config):
         labels = model.labels
     else:
         labels = []
-    parse_detections(camera_config, device, labels , modelType)
     
-
-
+    # Start parse_detections in a separate daemon thread
+    # Daemon threads will be automatically terminated when the main process exits
+    detection_thread = threading.Thread(
+        target=parse_detections, 
+        args=(camera_config, device, labels, modelType),
+        daemon=True,  # This ensures the thread is terminated when main process exits
+        name=f"DetectionThread-{camera_config['id']}"
+    )
+    detection_thread.start()
+    log.info(f"Started detection daemon thread for camera {camera_config['id']}")
+    
 
 def take_picture(camera_id, op_id):
     """Take a picture and upload it as event.
@@ -587,7 +595,7 @@ def start_video_recording(camera_id, local_op_id, duration, framerate):
     video_path = os.path.join(output_dir, video_filename)
 
     fourcc = cv2.VideoWriter_fourcc(*'avc1')
-    fps = config.get("fps", framerate) # Use FPS from config, default to 15
+    fps = current_config.get("fps", framerate) # Use FPS from config, default to 15
 
     try:
         video_writer = cv2.VideoWriter(video_path, fourcc, fps, (w, h))
@@ -697,15 +705,47 @@ def custom_annotate_boxes(
 
         return frame.image
 
-if __name__ == "__main__":
-    start_watcher()
+def main():
+    """Main function with parameterizable config files for better testability."""
+    global PLUGIN_CONFIG_FILE, CAMERA_CONFIG_FILE, LOGGING_CONFIG_FILE, MODEL_BASE_PATH, current_config
     args = get_args()
-    config = init_plugin_config(args)
-    current_config = config
-    init_mqtt(config)
-    start_health_checks() #healthcheck service
-    for camera in config["cameras"]:
-        camera_config = config["cameras"][camera]
+    plugin_config_file = args.plugin_config
+    logging_config_file = args.logging_config
+    camera_config_file = args.camera_config
+    model_base_path = args.model_base_path
+    # Override config files if provided
+    if plugin_config_file:
+        PLUGIN_CONFIG_FILE = plugin_config_file
+    if camera_config_file:
+        CAMERA_CONFIG_FILE = camera_config_file
+    if logging_config_file:
+        LOGGING_CONFIG_FILE = logging_config_file
+    if model_base_path:
+        MODEL_BASE_PATH = model_base_path
+
+    setup_logging(LOGGING_CONFIG_FILE)
+
+    # Initialize configuration and MQTT connection
+    current_config = init_plugin_config()
+    init_mqtt(current_config)
+
+    # Start health checks
+    start_health_checks()
+    
+    # Start detection threads for all cameras (these will run as daemon threads)
+    for camera in current_config["cameras"]:
+        camera_config = current_config["cameras"][camera]
         register_capabilities(camera_config)
         merged_config = update_camera_config(camera_config["id"], camera_config["metadata"]["model"], False)
         start_model(merged_config["cameras"][camera])
+    
+    start_watcher([PLUGIN_CONFIG_FILE, CAMERA_CONFIG_FILE])
+    
+    # Subscribe to MQTT topics after initialization
+    if mqtt_client.is_connected():
+        subscribe_to_topics()
+
+if __name__ == "__main__":
+    main()
+    while True:
+        time.sleep(1)
