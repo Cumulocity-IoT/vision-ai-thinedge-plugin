@@ -1,0 +1,33 @@
+name: Build and Release Debian Package
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # Set up Docker Buildx for advanced features like caching
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Install just
+      - name: Install just
+        uses: taiki-e/install-action@just 
+        
+      # Build both architectures using the justfile
+      - name: Build Debian Packages
+        run: just
+
+      # Upload the .deb packages
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-packages
+          path: ${{ github.workspace }}/*.deb
