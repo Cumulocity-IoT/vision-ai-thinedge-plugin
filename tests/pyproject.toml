@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vision-ai-thinedge-plugin"
+version = "0.1.0"
+description = "Vision AI ThinEdge Plugin with rpi_vision_ai_processor and vision_ai_mapper"
+authors = [
+    { name = "Cumulocity GmbH" }
+]
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+
+dependencies = [
+    # Add runtime dependencies here, e.g.
+    "numpy",
+    "paho-mqtt>=2.0",
+    "pyyaml",
+    "opencv-python",
+    "watchdog"
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools]
+package-dir = {"" = "../rpi-vision-ai-processor/opt/rpivisionai"}
+py-modules = ["rpi_vision_ai_processor", "vision_ai_mapper"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["rpi_vision_ai_processor", "vision_ai_mapper"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+]
