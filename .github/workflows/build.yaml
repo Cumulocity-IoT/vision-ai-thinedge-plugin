@@ -3,18 +3,20 @@ name: Build and Release Debian Package
 on:
   push:
     tags:
-      - '*'
+      - 'v*'
+  workflow_dispatch:
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout
+      - uses: actions/checkout@v5
 
       # Install just
       - name: Install just
-        run: |
-          curl -sL https://just.systems/install.sh | bash -s -- --to /usr/local/bin
-
+        uses: taiki-e/install-action@just 
+        
       # Build both architectures using the justfile
       - name: Build Debian Packages
         run: just

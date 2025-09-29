@@ -22,3 +22,6 @@ build-aarch64: build-aarch64-docker
     docker run --platform linux/aarch64 -v {{justfile_directory()}}:/work --rm dockcross-uv-aarch64 /usr/bin/build.sh
 
 build-all: build-arm32 build-aarch64
+
+test-units:
+    cd tests && uv run pytest .
