@@ -6,8 +6,6 @@ from typing import Any, Optional
 
 import yaml
 import os
-import pwd
-import grp
 import threading
 import time
 from datetime import datetime
@@ -16,33 +14,35 @@ import subprocess
 
 import paho.mqtt.client as mqtt
 
-LOG_DIR = "/var/log/tedge/vai-plugin"
-USER = "tedge"
-GROUP = "tedge"
+# Default paths - can be overridden via environment variables or parameters
+DEFAULT_LOG_DIR = "/var/log/tedge/vai-plugin"
+DEFAULT_LOGGING_CONFIG = "/etc/tedge/plugins/vai-plugin/vision_ai_mapper_logging.conf"
+DEFAULT_PLUGIN_CONFIG = "/etc/tedge/plugins/vai-plugin/plugin_config.yaml"
 
-def ensure_dir(path, mode=0o755):
+# Get configurable paths from environment variables or use defaults
+LOG_DIR = os.getenv("VAI_LOG_DIR", DEFAULT_LOG_DIR)
+LOGGING_CONFIG_FILE = os.getenv("VAI_MAPPER_LOGGING_CONFIG", DEFAULT_LOGGING_CONFIG)
+PLUGIN_CONFIG_FILE = os.getenv("VAI_PLUGIN_CONFIG", DEFAULT_PLUGIN_CONFIG)
+
+def ensure_dir(path):
     os.makedirs(path, exist_ok=True)
-    os.chmod(path, mode)
 
-def ensure_keep_file(path, mode=0o644):
-    if not os.path.exists(path):
-        with open(path, "w") as f:
-            f.write("This file is here to ensure the directory exists.\n")
-    os.chmod(path, mode)
-
-# Usage
-ensure_dir(LOG_DIR)
-ensure_keep_file(os.path.join(LOG_DIR, ".keep"))
-
-logging.config.fileConfig('/etc/tedge/plugins/vai-plugin/vision_ai_mapper_logging.conf', disable_existing_loggers=False)
-log = logging.getLogger(__name__)
-log.info("Log rotation setup successfully!")
+def setup_logging(logging_config_path: str):
+    # just make sure the default log folder exists
+    ensure_dir(LOG_DIR)
+    """Setup logging configuration with parameterizable config file path."""
+    if os.path.exists(logging_config_path):
+        logging.config.fileConfig(logging_config_path, disable_existing_loggers=False)
+    else:
+        # Fallback to basic logging if config file doesn't exist
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
 
 mqtt_client: mqtt.Client
-
+log: logging.Logger
 operations_in_progress: dict[str, dict] = {}
-
-PLUGIN_CONFIG_FILE= "/etc/tedge/plugins/vai-plugin/plugin_config.yaml"
 
 @dataclass
 class OperationResult:
@@ -232,9 +232,29 @@ def load_config(filename):
         log.info(f"? Error loading {filename}: {e}")
         return {}
 
-if __name__ == "__main__":
+def main(plugin_config_file=None, logging_config_file=None):
+    """Main function with parameterizable config files for better testability."""
+    global PLUGIN_CONFIG_FILE, LOGGING_CONFIG_FILE, log
+    
+    # Override config files if provided
+    if plugin_config_file:
+        PLUGIN_CONFIG_FILE = plugin_config_file
+    if logging_config_file:
+        LOGGING_CONFIG_FILE = logging_config_file
+    setup_logging(LOGGING_CONFIG_FILE)
+    log = logging.getLogger(__name__)
+    log.info("Log rotation setup successfully!")
     plugin_config = load_config(PLUGIN_CONFIG_FILE)
     init_mqtt(plugin_config)
     start_health_checks()
     while True:
         time.sleep(0.5)
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description='Vision AI Mapper Service')
+    parser.add_argument('-p', '--plugin-config', help='Path to plugin configuration file')
+    parser.add_argument('-l', '--logging-config', help='Path to logging configuration file')
+    args = parser.parse_args()
+    
+    main(plugin_config_file=args.plugin_config, logging_config_file=args.logging_config)

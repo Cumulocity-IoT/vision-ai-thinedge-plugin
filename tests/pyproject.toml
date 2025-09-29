@@ -35,3 +35,8 @@ testpaths = ["tests"]
 [tool.coverage.run]
 branch = true
 source = ["rpi_vision_ai_processor", "vision_ai_mapper"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+]
