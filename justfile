@@ -33,3 +33,9 @@ build-all: build-arm32 build-aarch64
 
 test-units:
     cd tests && uv run pytest .
+
+format:
+   cd rpi-vision-ai-processor/opt/rpivisionai/ && uv run --no-project black .
+
+lint:
+   uv run pylint rpi-vision-ai-processor/opt/rpivisionai/*.py
