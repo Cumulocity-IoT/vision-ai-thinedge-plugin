@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import time
+import base64
 from datetime import datetime
 from functools import lru_cache
 from typing import List, Optional
@@ -328,8 +329,16 @@ def parse_detections(camera_config, device, labels, modelType):
                         custom_annotate_boxes(annotator, frame, detections=detections)
                 # Publish detected object event if conditions are met
                 json_objects = detections_to_json_list(detections, labels, modelType)
+                if latest_frame is not None and isinstance(latest_frame, np.ndarray):
+                    success, encoded_img = cv2.imencode('.jpg', latest_frame)
+                    if success:
+                        # Convert encoded image (NumPy array) to Base64 string
+                        frame_base64 = base64.b64encode(encoded_img).decode('utf-8')
+                        log.info(f"JPEG frame size: {len(encoded_img)} bytes, \
+                                 Base64 frame Size: {sys.getsizeof(frame_base64)} bytes")
                 full_output = {
                     "frame_id": frame_counter,
+                    "frame": f"data:image/jpeg;base64,{frame_base64}",
                     "timestamp": frame.timestamp,
                     "detections": json_objects
                 }
