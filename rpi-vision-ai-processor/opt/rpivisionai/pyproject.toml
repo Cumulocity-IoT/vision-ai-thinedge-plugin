@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-modlib={ git= "https://github.com/C8Y-Mario/aitrios-rpi-application-module-library", branch="main" }
+modlib={ git= "https://github.com/SonySemiconductorSolutions/aitrios-rpi-application-module-library", tag="v1.1.1" }
 
 [[tool.uv.index]]
 name="pywheel"

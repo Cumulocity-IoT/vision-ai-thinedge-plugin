@@ -6,8 +6,12 @@ set -e
 COMMAND="$1"
 shift
 
-MODEL="$1"
-shift
+case "$COMMAND" in
+    install|remove)
+        MODEL="$1"
+        shift
+        ;;
+esac
 
 VERSION=""
 FILE=""

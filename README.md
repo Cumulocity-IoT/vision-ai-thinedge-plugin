@@ -1,4 +1,4 @@
-# Raspberry PI Vision AI Processor 1.1.0
+# Raspberry PI Vision AI Processor
 
 This project provides a thin-edge.io plugin that supports **classification**, **object detection** using the IMX500 Vision AI capabilities on the Raspberry Pi AI Camera. The script has been packaged as a **Debian package** and can be deployed on a **Raspberry Pi**.
 
