@@ -428,7 +428,7 @@ def parse_detections(camera_config, device, labels, model_type):
                     "frame_id": frame_counter,
                     "frame": f"data:image/jpeg;base64,{frame_base64}",
                     "timestamp": frame.timestamp,
-                    "detections": json_objects
+                    "detections": json_objects,
                 }
                 # Convert to JSON string
                 json_string = json.dumps(full_output, indent=2)
