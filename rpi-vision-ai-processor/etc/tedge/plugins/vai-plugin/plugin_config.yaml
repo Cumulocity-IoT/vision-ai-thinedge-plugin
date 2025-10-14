@@ -8,3 +8,4 @@ mqtt:
     classification: "classification"
     status: "CameraServiceStatus"
   client_id: "imx500_ai_camera_publisher"
+enable_frame_encoding: false
