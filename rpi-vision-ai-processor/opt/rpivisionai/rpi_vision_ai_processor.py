@@ -417,16 +417,23 @@ def parse_detections(camera_config, device, labels, model_type):
                         custom_annotate_boxes(annotator, frame, detections=detections)
                 # Publish detected object event if conditions are met
                 json_objects = detections_to_json_list(detections, labels)
-                if latest_frame is not None and isinstance(latest_frame, np.ndarray):
-                    success, encoded_img = cv2.imencode('.jpg', latest_frame)
-                    if success:
-                        # Convert encoded image (NumPy array) to Base64 string
-                        frame_base64 = base64.b64encode(encoded_img).decode('utf-8')
-                        log.info(f"JPEG frame size: {len(encoded_img)} bytes, \
-                                 Base64 frame Size: {sys.getsizeof(frame_base64)} bytes")        
+                if current_config.get('enable_frame_encoding', False):
+                    if latest_frame is not None and isinstance(latest_frame, np.ndarray):
+                        success, encoded_img = cv2.imencode('.jpg', latest_frame)
+                        if success:
+                            # Convert encoded image (NumPy array) to Base64 string
+                            frame_base64 = base64.b64encode(encoded_img).decode('utf-8')
+                            log.debug(
+                                f"JPEG frame size: {len(encoded_img)} bytes, "
+                                f"Base64 frame size: {sys.getsizeof(frame_base64)} bytes"
+                            )
+                    else:
+                        frame_base64 = None
+                else:
+                    frame_base64 = None  # Encoding disabled        
                 full_output = {
                     "frame_id": frame_counter,
-                    "frame": f"data:image/jpeg;base64,{frame_base64}",
+                    "frame": f"data:image/jpeg;base64,{frame_base64}" if frame_base64 else None,
                     "timestamp": frame.timestamp,
                     "detections": json_objects
                 }
