@@ -52,6 +52,8 @@ case "$COMMAND" in
     install)
         TARGET_DIR="${BASE_MODEL_DIR}/${MODEL}"
         mkdir -p "$TARGET_DIR"
+        echo "cleaning up the existing files in ..${TARGET_DIR}"
+        rm -rf "${TARGET_DIR:?}/"*
         # Unzip the file
         echo "Unzipping file..."
         unzip -o "$FILE" -d "$TARGET_DIR"
