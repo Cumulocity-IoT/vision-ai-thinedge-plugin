@@ -124,11 +124,29 @@ def publish_service_status(client, device_id, status, event_type):
 
 def get_model_paths(config) -> tuple[str, Optional[str], Optional[str]]:
     """Get the paths for model file, labels file, and version from configuration."""
-    model_path = config["metadata"]["model"]
-    files = os.listdir(os.path.join(MODEL_BASE_PATH, model_path))
+    try:
+        model_path = config["metadata"]["model"]
+    except KeyError:
+        log.error("Model path not found in configuration metadata")
+        raise ValueError("Model path not found in configuration metadata")
+
+    model_dir = os.path.join(MODEL_BASE_PATH, model_path)
+    if not os.path.exists(model_dir):
+        log.error(f"Model directory does not exist: {model_dir}")
+        raise FileNotFoundError(f"Model directory does not exist: {model_dir}")
+
+    try:
+        files = os.listdir(model_dir)
+    except (OSError, PermissionError) as e:
+        log.error(f"Cannot read model directory {model_dir}: {e}")
+        raise
 
     # Get model file and labels file
-    model_filename = next((f for f in files if f.endswith(".rpk")))
+    model_filename = next((f for f in files if f.endswith(".rpk")), None)
+    if model_filename is None:
+        log.error(f"No .rpk model file found in {model_dir}")
+        raise FileNotFoundError(f"No .rpk model file found in {model_dir}")
+
     model_labels = next((f for f in files if f.endswith(".txt")), None)
     version_file = next((f for f in files if f == "version"), None)
     version = None
@@ -223,7 +241,7 @@ def init_mqtt(config):
     """Initialize and connect the MQTT client."""
     global mqtt_client
     # Initialize MQTT client
-    mqtt_client = mqtt.Client(config["mqtt"]["client_id"])
+    mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, config["mqtt"]["client_id"])
     mqtt_client.on_connect = on_connect
     mqtt_client.will_set(
         topic="te/device/main/service/rpi-vision-ai-processor/status/health",
@@ -337,7 +355,13 @@ def detections_to_json_list(
         if isinstance(detections, (Detections, Classifications)):
             class_id = int(detections.class_id[i])
             det["class_id"] = class_id
-            det["label"] = labels[class_id]
+            # Handle case where labels might be empty or class_id out of bounds
+            if labels is not None and len(labels) > class_id:
+                det["label"] = labels[class_id]
+            else:
+                det["label"] = f"class_{class_id}"
+                if len(labels) <= class_id:
+                    log.warning(f"Class ID {class_id} out of bounds for labels array of length {len(labels)}")
         if isinstance(detections, (Detections, Poses)) and detections.bbox.size != 0:
             det["bbox"] = detections.bbox[i].tolist()
             det["tracker_id"] = (
@@ -362,7 +386,6 @@ def parse_detections(camera_config, device, labels, model_type):
     annotator = Annotator(
         color=ColorPalette.default(), thickness=2, text_thickness=2, text_scale=0.8
     )
-
     if model_type in ("object detection", "pose detection"):
         tracker = BYTETracker(
             BYTETrackerArgs(**camera_config.get("tracker", {}))
@@ -563,7 +586,15 @@ class ClassificationModel(Model):
             color_format=COLOR_FORMAT.RGB,
             preserve_aspect_ratio=False,
         )
-        self.labels = np.genfromtxt(labels, dtype=str, delimiter="\n", ndmin=1)
+        if labels is None:
+            log.warning("No labels file provided for classification model. Using empty labels.")
+            self.labels = np.array([])
+        else:
+            try:
+                self.labels = np.genfromtxt(labels, dtype=str, delimiter="\n", ndmin=1)
+            except (OSError, ValueError) as e:
+                log.error(f"Failed to load labels from {labels}: {e}")
+                raise ValueError(f"Failed to load labels file: {e}")
         self.camera_config = camera_config
 
     def pre_process(self, image: np.ndarray) -> np.ndarray:
@@ -588,7 +619,15 @@ class DetectionModel(Model):
             color_format=COLOR_FORMAT.RGB,
             preserve_aspect_ratio=False,
         )
-        self.labels = np.genfromtxt(labels, dtype=str, delimiter="\n", ndmin=1)
+        if labels is None:
+            log.warning("No labels file provided for detection model. Using empty labels.")
+            self.labels = np.array([])
+        else:
+            try:
+                self.labels = np.genfromtxt(labels, dtype=str, delimiter="\n", ndmin=1)
+            except (OSError, ValueError) as e:
+                log.error(f"Failed to load labels from {labels}: {e}")
+                raise ValueError(f"Failed to load labels file: {e}")
         self.camera_config = camera_config
 
     def pre_process(self, image: np.ndarray) -> np.ndarray:
@@ -616,7 +655,15 @@ class PoseEstimationModel(Model):
             color_format=COLOR_FORMAT.RGB,
             preserve_aspect_ratio=False,
         )
-        self.labels = np.genfromtxt(labels, dtype=str, delimiter="\n", ndmin=1)
+        if labels is None:
+            log.warning("No labels file provided for pose estimation model. Using empty labels.")
+            self.labels = np.array([])
+        else:
+            try:
+                self.labels = np.genfromtxt(labels, dtype=str, delimiter="\n", ndmin=1)
+            except (OSError, ValueError) as e:
+                log.error(f"Failed to load labels from {labels}: {e}")
+                raise ValueError(f"Failed to load labels file: {e}")
         self.camera_config = camera_config
 
     def pre_process(self, image: np.ndarray) -> np.ndarray:
@@ -631,38 +678,90 @@ class PoseEstimationModel(Model):
 
 def get_model_type(model_file, camera_config):
     """Determine the model type from configuration or intrinsics."""
-    if camera_config["metadata"]["modeltype"] is not None:
-        return camera_config["metadata"]["modeltype"]
-    imx500 = IMX500(model_file)
-    intrinsics = imx500.network_intrinsics or NetworkIntrinsics()
-    log.info(f"model Type: {intrinsics.task}")
-    return intrinsics.task
+    # First try to get modeltype from metadata
+    modeltype = camera_config.get("metadata", {}).get("modeltype")
+    if modeltype is not None:
+        return modeltype
+
+    # Fallback to reading from model intrinsics
+    try:
+        imx500 = IMX500(model_file)
+        intrinsics = imx500.network_intrinsics or NetworkIntrinsics()
+        log.info(f"model Type: {intrinsics.task}")
+        return intrinsics.task
+    except Exception as e:
+        log.error(f"Failed to determine model type from model file {model_file}: {e}")
+        raise ValueError(f"Could not determine model type. Ensure 'modeltype' is set in configuration or model file is valid.")
 
 
 def start_model(camera_config):
     """Initialize and start the AI model for a camera."""
     model = None
-    # update model and labels
-    model_file, label_file, version = get_model_paths(camera_config)
+    camera_id = camera_config.get("id", "unknown")
 
-    model_type = get_model_type(model_file, camera_config)
-    if model_type == "classification":
-        model = ClassificationModel(
-            custom_model_file=model_file, labels=label_file, camera_config=camera_config
+    try:
+        # update model and labels
+        model_file, label_file, version = get_model_paths(camera_config)
+    except (ValueError, FileNotFoundError, KeyError) as e:
+        log.error(f"Failed to get model paths for camera {camera_id}: {e}")
+        publish_service_status(
+            mqtt_client,
+            camera_id,
+            f"Failed to load model: {str(e)}",
+            "camera_service_error",
         )
-    elif model_type == "object detection":
-        model = DetectionModel(
-            custom_model_file=model_file, labels=label_file, camera_config=camera_config
+        raise
+
+    try:
+        model_type = get_model_type(model_file, camera_config)
+    except (ValueError, Exception) as e:
+        log.error(f"Failed to determine model type for camera {camera_id}: {e}")
+        publish_service_status(
+            mqtt_client,
+            camera_id,
+            f"Failed to determine model type: {str(e)}",
+            "camera_service_error",
         )
-    elif model_type == "pose detection":
-        model = PoseEstimationModel(
-            custom_model_file=model_file, labels=label_file, camera_config=camera_config
+        raise
+
+    try:
+        if model_type == "classification":
+            model = ClassificationModel(
+                custom_model_file=model_file, labels=label_file, camera_config=camera_config
+            )
+        elif model_type == "object detection":
+            model = DetectionModel(
+                custom_model_file=model_file, labels=label_file, camera_config=camera_config
+            )
+        elif model_type == "pose detection":
+            model = PoseEstimationModel(
+                custom_model_file=model_file, labels=label_file, camera_config=camera_config
+            )
+        else:
+            raise NotImplementedError(f"Model type not supported: {model_type}")
+    except Exception as e:
+        log.error(f"Failed to initialize {model_type} model for camera {camera_id}: {e}")
+        publish_service_status(
+            mqtt_client,
+            camera_id,
+            f"Failed to initialize model: {str(e)}",
+            "camera_service_error",
         )
-    else:
-        raise NotImplementedError(f"Model type not supported: {model_type}")
-    fps = camera_config["metadata"].get("framerate", 15)
-    device = AiCamera(frame_rate=fps)
-    device.deploy(model)
+        raise
+
+    try:
+        fps = camera_config.get("metadata", {}).get("framerate", 15)
+        device = AiCamera(frame_rate=fps)
+        device.deploy(model)
+    except Exception as e:
+        log.error(f"Failed to deploy model to camera {camera_id}: {e}")
+        publish_service_status(
+            mqtt_client,
+            camera_id,
+            f"Failed to deploy model: {str(e)}",
+            "camera_service_error",
+        )
+        raise
 
     imx_model = camera_config["metadata"]["model"]
     model_info = {"model": imx_model, "version": version}
@@ -889,7 +988,15 @@ def custom_annotate_boxes(
         if skip_label:
             continue
 
-        label = f"{class_id if (labels is None) else labels[class_id]} {tracker_id}"
+        # Handle labels safely
+        if labels is None or len(labels) == 0:
+            label_text = str(class_id)
+        elif isinstance(class_id, int) and len(labels) > class_id:
+            label_text = labels[class_id]
+        else:
+            label_text = str(class_id)
+
+        label = f"{label_text} {tracker_id}"
 
         annotator.set_label(
             image=frame.image, x=x1, y=y1 - 20, color=color.as_bgr(), label=label
