@@ -6,13 +6,17 @@ authors = [
     {name = "Cumulocity GmbH"}
 ]
 readme = "README.md"
-requires-python = ">=3.9,<3.12"
+requires-python = ">=3.9,<=3.13"
 dependencies = [
-  "modlib"
+  "modlib",
+  "paho-mqtt>=2.0"
 ]
 
 [tool.uv.sources]
-modlib={ git= "https://github.com/SonySemiconductorSolutions/aitrios-rpi-application-module-library", tag="v1.1.1" }
+modlib = [
+  { git = "https://github.com/SonySemiconductorSolutions/aitrios-rpi-application-module-library", tag = "v1.1.1", marker = "python_version == '3.11'" },
+  { git = "https://github.com/C8Y-Mario/aitrios-rpi-application-module-library", branch = "python3.13", marker = "python_version >= '3.13'" }
+]
 
 [[tool.uv.index]]
 name="pywheel"

@@ -66,7 +66,7 @@ def init_mqtt(config):
     """Initialize and connect the MQTT client."""
     global mqtt_client
     # Initialize MQTT client
-    mqtt_client = mqtt.Client("vision-ai-mapper")
+    mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, "vision-ai-mapper")
     mqtt_client.on_connect = on_connect
     mqtt_client.will_set(
         topic="te/device/main/service/vision-ai-mapper/status/health",
