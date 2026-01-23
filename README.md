@@ -1,6 +1,6 @@
 # Raspberry PI Vision AI Processor
 
-This project provides a thin-edge.io plugin that supports **classification**, **object detection** using the IMX500 Vision AI capabilities on the Raspberry Pi AI Camera. The script has been packaged as a **Debian package** and can be deployed on a **Raspberry Pi**.
+This project provides a thin-edge.io plugin that supports **classification**, **object detection**, and **pose detection** using the IMX500 Vision AI capabilities on the Raspberry Pi AI Camera. The script has been packaged as a **Debian package** and can be deployed on a **Raspberry Pi**.
 
 
 ## Usage
@@ -125,7 +125,7 @@ cameras:
       model: cup-detection # name of the model as in the local repository (folder name)
       framerate: 15
       threshold: 0.3
-      modeltype: object detection  #either "object detection" or "classification"
+      modeltype: object detection  #either "object detection", "classification", or "pose detection"
       bbox_normalization: False
       bbox_order: yx
       output_order: bscn #bscn or bcsn
@@ -145,8 +145,11 @@ The **tracker** section is only relevant for object detection models. It configu
 
 
 ## Other Supported Operations
+
 ### Image Capturing
-Create an operation of type "c8y_ImageCapture". 
+
+**Via Cumulocity**
+Create an operation for the child device with type "c8y_ImageCapture" and send it to the platform. 
 ```json
 {
     "deviceId": "<cameraId>",
@@ -178,6 +181,8 @@ It can be viewed by e.g. going to the event list for the device and checking the
 
 ### Video Capturing
 
+#### Via Cumulocity
+
 This works similar to image capturing, just with the *c8y_VideoCapture* type. The c8y_VideoCapture fragment also allows optional framerate (in fps) and duration (in seconds) parameters.
 ```json
 {
@@ -190,15 +195,29 @@ This works similar to image capturing, just with the *c8y_VideoCapture* type. Th
 }
 ```
 
-This will record and produce an mp4 file which will be stopped and uploaded after <duration> seconds. 
+This will record and produce an mp4 file which will be stopped and uploaded after \<duration\> seconds. 
+
+#### Local on the Pi via MQTT
+
+Send a JSON message with framerate and duration to the local MQTT topic. The camera-id must match your device
+E.g.:
+
+    tedge mqtt pub 'vai/ai_camera/video/capture' '{"duration":10, "framerate":15}'
+
+This will start the video capture and give the filename as part of the result details:
+
+    tedge mqtt sub 'vai/#/result'
+    [vai/ai_camera/video/capture/result] {"status": "successful", "id": "capture", "camera_id": "ai_camera", "result": "/tmp/20260123_085402.mp4" }
 
 ## Used topics 
 | Topic                                  | Description                                         | Content                                                            |
 |----------------------------------------|-----------------------------------------------------|--------------------------------------------------------------------|
-| vai/<camera-id>/image/<op-id>          | incoming image operation used by camera-plugin      | The Cumulocity Operation (see ImageCapture)                        |
-| vai/<camera-id>/image/<op-id>/result   | outgoing result of image operation                  | An operation result with the filename as result or an error reason | 
-| vai/<camera-id>/model/activate/<op-id> | topic for informing the camera plugin about activating a model | model name                                                         |
-| vai/<camera-id>/model/activate/<op-id>/result | topic for the activation result                     | An operation result with the model name as result or error reason  |                                      
+| vai/\<camera-id\>/image/\<op-id\>          | incoming image operation used by camera-plugin      | The Cumulocity Operation (see ImageCapture)                        |
+| vai/\<camera-id\>/image/\<op-id\>/result   | outgoing result of image operation                  | An operation result with the filename as result or an error reason | 
+| vai/\<camera-id\>/video/\<op-id\>          | incoming video operation used by camera-plugin      | The Cumulocity Operation (see VideoCapture)                        |
+| vai/\<camera-id\>/video/\<op-id\>/result   | outgoing result of video operation                  | An operation result with the filename as result or an error reason | 
+| vai/\<camera-id\>/model/activate/\<op-id\> | topic for informing the camera plugin about activating a model | model name                                                         |
+| vai/\<camera-id\>/model/activate/\<op-id\>/result | topic for the activation result                     | An operation result with the model name as result or error reason  |                                      
 
 
 ## Output
@@ -242,6 +261,7 @@ This is an array of Detecetion objects.
 
 ### Object classification:
 ```JSON
+{
   "frame_id": 91208,
   "timestamp": "2025-06-18T23:01:53.414736",
   "detections": [
@@ -253,6 +273,35 @@ This is an array of Detecetion objects.
   ]
 }
 ```
+
+### Pose detection:
+
+This is an array of Detection objects with bounding boxes and keypoints for each detected pose.
+
+```JSON
+{
+  "frame_id": 91208,
+  "timestamp": "2025-06-18T23:01:53.414736",
+  "detections": [
+    {
+      "category": 0,
+      "label": "Person",
+      "conf": 0.94,
+      "box": [150, 100, 180, 280],
+      "tracker_id": 1,
+      "keypoints": [
+        ["nose", 165.2, 112.4, 0.95],
+        ["left_eye", 162.1, 108.3, 0.92],
+        ["right_eye", 168.5, 108.1, 0.91],
+        ["left_shoulder", 155.0, 140.2, 0.89],
+        ["right_shoulder", 175.3, 139.8, 0.88]
+      ]
+    }
+  ]
+}
+```
+
+Each keypoint is an array containing: `[label, x_coordinate, y_coordinate, confidence_score]`.
 
 
 ## Show Preview Window ##
