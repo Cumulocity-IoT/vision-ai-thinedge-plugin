@@ -1,6 +1,6 @@
 # Justfile for cross-platform Docker builds
 
-default: enable-emulation build-all
+default: enable-emulation build-all build-all-trixie
 
 # Enable QEMU emulation
 enable-emulation:
