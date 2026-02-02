@@ -19,6 +19,8 @@ import cv2
 from picamera2.devices import IMX500
 from picamera2.devices.imx500 import NetworkIntrinsics
 
+from mjpeg_server import MJPEGServer
+
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
@@ -28,8 +30,8 @@ from modlib.apps.annotate import ColorPalette, Annotator
 from modlib.devices import AiCamera
 
 from modlib.models.model import COLOR_FORMAT, MODEL_TYPE, Model
-from modlib.devices.frame import Frame, IMAGE_TYPE
-from modlib.models.results import Classifications, Detections, Poses, Segments
+from modlib.devices.frame import Frame
+from modlib.models.results import Classifications, Detections, Poses
 from modlib.models.post_processors import (
     pp_od_bscn,
     pp_od_bcsn,
@@ -71,8 +73,6 @@ mqtt_client: mqtt.Client
 latest_frame = None
 frame_lock = threading.Lock()
 frame_counter: int = 0
-show_preview: bool = False
-is_fullscreen: bool = False
 
 
 # Global variable to control recording
@@ -87,6 +87,12 @@ current_config = {}
 
 # current running recording operation, if any
 video_op: str | None
+
+# MJPEG streaming server for WebRTC (via go2rtc)
+mjpeg_server: MJPEGServer | None = None
+mjpeg_thread: threading.Thread | None = None
+current_detections = None  # Shared detections for MJPEG overlay
+labels_for_stream = None  # Shared labels for MJPEG overlay
 
 
 def ensure_dir(path):
@@ -260,11 +266,124 @@ def subscribe_to_topics():
     """Subscribe to MQTT topics after all initialization is complete."""
     mqtt_client.subscribe("vai/+/image/+")
     mqtt_client.subscribe("vai/+/video/+")
+    mqtt_client.subscribe("vai/+/stream/+")
     mqtt_client.subscribe("vai/+/model/activate/+")
     log.info("Subscribed to MQTT topics")
 
 
 # Object Detection Logic
+
+
+def start_stream_operation(camera_id: str, op_id: str, config: dict):
+    """
+    Start MJPEG server for go2rtc consumption.
+
+    Args:
+        camera_id: Camera identifier
+        op_id: Operation ID for tracking
+        config: Configuration dict with port, quality, fps
+    """
+    global mjpeg_server, mjpeg_thread
+
+    log.info(f"Starting stream operation for camera {camera_id}, op {op_id}")
+
+    # Check if already running
+    if mjpeg_server is not None:
+        error_msg = "Stream already running"
+        log.warning(error_msg)
+        mqtt_client.publish(
+            f"vai/{camera_id}/stream/{op_id}/result",
+            json.dumps({"status": "failed", "reason": error_msg}),
+        )
+        return
+
+    # Extract config with defaults
+    port = config.get("port", current_config.get("streaming", {}).get("mjpeg_port", 8080))
+    quality = config.get("quality", current_config.get("streaming", {}).get("quality", 80))
+    fps = config.get("fps", current_config.get("streaming", {}).get("fps", 10))
+
+    log.info(f"MJPEG server config: port={port}, quality={quality}, fps={fps}")
+
+    # Create and start server
+    try:
+        mjpeg_server = MJPEGServer(
+            port=port,
+            quality=quality,
+            fps=fps,
+            frame_lock=frame_lock,
+            get_latest_frame=lambda: latest_frame,
+            get_current_detections=lambda: current_detections,
+            get_labels=lambda: labels_for_stream,
+        )
+        mjpeg_thread = threading.Thread(
+            target=mjpeg_server.serve_forever, daemon=True
+        )
+        mjpeg_thread.start()
+
+        log.info(f"MJPEG server started successfully on port {port}")
+
+        # Publish success
+        mqtt_client.publish(
+            f"vai/{camera_id}/stream/{op_id}/result",
+            json.dumps({
+                "status": "successful",
+                "port": port,
+                "url": f"http://127.0.0.1:{port}/stream",
+                "info": "Stream available via Cumulocity Remote Access"
+            }),
+        )
+    except Exception as e:
+        error_msg = f"Failed to start MJPEG server: {e}"
+        log.error(error_msg, exc_info=True)
+        mqtt_client.publish(
+            f"vai/{camera_id}/stream/{op_id}/result",
+            json.dumps({"status": "failed", "reason": error_msg}),
+        )
+
+
+def stop_stream_operation(camera_id: str, op_id: str):
+    """
+    Stop MJPEG server.
+
+    Args:
+        camera_id: Camera identifier
+        op_id: Operation ID for tracking
+    """
+    global mjpeg_server, mjpeg_thread
+
+    log.info(f"Stopping stream operation for camera {camera_id}, op {op_id}")
+
+    if mjpeg_server is None:
+        error_msg = "No stream running"
+        log.warning(error_msg)
+        mqtt_client.publish(
+            f"vai/{camera_id}/stream/{op_id}/result",
+            json.dumps({"status": "failed", "reason": error_msg}),
+        )
+        return
+
+    # Stop server
+    try:
+        mjpeg_server.shutdown()
+        if mjpeg_thread and mjpeg_thread.is_alive():
+            mjpeg_thread.join(timeout=5)
+        mjpeg_server = None
+        mjpeg_thread = None
+
+        log.info("MJPEG server stopped successfully")
+
+        # Publish success
+        mqtt_client.publish(
+            f"vai/{camera_id}/stream/{op_id}/result",
+            json.dumps({"status": "successful"}),
+        )
+    except Exception as e:
+        error_msg = f"Error stopping MJPEG server: {e}"
+        log.error(error_msg, exc_info=True)
+        mqtt_client.publish(
+            f"vai/{camera_id}/stream/{op_id}/result",
+            json.dumps({"status": "failed", "reason": error_msg}),
+        )
 
 
 # Define MQTT callbacks
@@ -321,6 +440,22 @@ def on_message(client, userdata, msg):
         start_video_recording(
             video_match.group(1), video_match.group(2), duration, framerate
         )
+        return
+    if stream_match := re.match(r"vai/([^/]+)/stream/([^/]+)", msg.topic):
+        camera_id = stream_match.group(1)
+        op_id = stream_match.group(2)
+        log.info(f"Stream operation: camera={camera_id}, op={op_id}, payload={payload}")
+
+        # Check if this is a stop request
+        try:
+            data = json.loads(payload) if payload.strip() else {}
+            if not data or data.get("action") == "stop":
+                stop_stream_operation(camera_id, op_id)
+            else:
+                start_stream_operation(camera_id, op_id, data)
+        except (ValueError, json.JSONDecodeError) as e:
+            log.warning(f"Invalid JSON in stream operation: {e}. Treating as start.")
+            start_stream_operation(camera_id, op_id, {})
         return
 
 
@@ -382,10 +517,8 @@ def detections_to_json_list(
 
 def parse_detections(camera_config, device, labels, model_type):
     """Parse and process detections from the camera stream, publishing results to MQTT."""
-    global latest_frame, frame_counter
-    annotator = Annotator(
-        color=ColorPalette.default(), thickness=2, text_thickness=2, text_scale=0.8
-    )
+    global latest_frame, frame_counter, current_detections, labels_for_stream
+
     if model_type in ("object detection", "pose detection"):
         tracker = BYTETracker(
             BYTETrackerArgs(**camera_config.get("tracker", {}))
@@ -430,14 +563,11 @@ def parse_detections(camera_config, device, labels, model_type):
                         detections.bbox /= w
                         if hasattr(detections, "keypoints"):
                             detections.keypoints /= w
-                if show_preview:
-                    if isinstance(detections, Detections):
-                        custom_annotate_boxes(
-                            annotator, frame, detections=detections, labels=labels
-                        )
-                    elif isinstance(detections, Poses):
-                        annotator.annotate_keypoints(frame, detections)
-                        custom_annotate_boxes(annotator, frame, detections=detections)
+
+                # Store detections for MJPEG streaming server
+                # All annotation/drawing logic is handled by mjpeg_server.py
+                current_detections = detections
+                labels_for_stream = labels
                 # Publish detected object event if conditions are met
                 json_objects = detections_to_json_list(detections, labels)
                 if current_config.get('enable_frame_encoding', False):
@@ -478,13 +608,6 @@ def parse_detections(camera_config, device, labels, model_type):
                     json_string,
                 )
                 log.debug("Detection published to MQTT")
-                if show_preview:
-                    windowname = camera_config["metadata"].get("model", "Application")
-                    frame.display(window_name=windowname)
-                    if is_fullscreen:
-                        cv2.setWindowProperty(
-                            windowname, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN
-                        )
 
 
 def get_args():
@@ -543,17 +666,12 @@ def update_camera_config(
 
 def init_plugin_config():
     """Initialize and merge plugin and camera configurations."""
-    global show_preview, is_fullscreen
     # Load both configurations
     plugin_config = load_config(PLUGIN_CONFIG_FILE)
     # TODO: handle multiple cameras/configs
     camera_config = load_config(CAMERA_CONFIG_FILE)
 
     config = {**plugin_config, **camera_config}
-    show_preview = config.get("show_preview", False) or config.get(
-        "show_fullscreen", False
-    )
-    is_fullscreen = config.get("show_fullscreen", False)
     return config
 
 
@@ -912,97 +1030,8 @@ def stop_video_recording(camera_id, reason="manual_stop"):
 
 def register_capabilities(config):
     """Register camera capabilities with the MQTT broker."""
-    for cmd in ["activate_model", "image_capture", "video_capture"]:
+    for cmd in ["activate_model", "image_capture", "video_capture", "video_stream"]:
         mqtt_client.publish(f'te/device/{config["id"]}///cmd/{cmd}', "{}")
-
-
-def custom_annotate_boxes(
-    annotator: Annotator,
-    frame: Frame,
-    detections: Detections,
-    labels: Optional[List[str]] = None,
-    skip_label: bool = False,
-) -> np.ndarray:
-    """
-    Draws bounding boxes on the frame using the detections provided.
-
-    Args:
-        frame: The frame to annotate.
-        detections: The detections for which the bounding boxes will be drawn
-        labels: An optional list of labels corresponding to each detection.
-            If `labels` are not provided, corresponding `class_id` will be used as label.
-        skip_label: Is set to `True`, skips bounding box label annotation.
-
-    Returns:
-        The annotated frame.image with bounding boxes.
-    """
-    if (
-        not isinstance(detections, Detections)
-        and not isinstance(detections, Poses)
-        and not isinstance(detections, Segments)
-    ):
-        raise ValueError(
-            "Input `detections` should be of type Detections, Poses, or Segments"
-        )
-
-    # NOTE: Compensating for any introduced modified region of interest (ROI)
-    # to ensure that detections are displayed correctly on top of the current `frame.image`.
-    if frame.image_type != IMAGE_TYPE.INPUT_TENSOR:
-        detections.compensate_for_roi(frame.roi)
-
-    h, w, _ = frame.image.shape
-    for i in range(len(detections)):
-        x1, y1, x2, y2 = detections.bbox[i]
-
-        # Rescaling to frame size
-        x1, y1, x2, y2 = (
-            int(x1 * w),
-            int(y1 * h),
-            int(x2 * w),
-            int(y2 * h),
-        )
-        if isinstance(detections, Detections):
-            class_id = (
-                detections.class_id[i] if detections.class_id is not None else None
-            )
-        else:  # Poses
-            class_id, idx = "Person", 0
-
-        tracker_id = (
-            detections.tracker_id[i] if detections.tracker_id is not None else None
-        )
-        idx = tracker_id if tracker_id is not None and tracker_id > 0 else i
-        color = (
-            annotator.color.by_idx(idx)
-            if isinstance(annotator.color, ColorPalette)
-            else annotator.color
-        )
-
-        cv2.rectangle(
-            img=frame.image,
-            pt1=(x1, y1),
-            pt2=(x2, y2),
-            color=color.as_bgr(),
-            thickness=annotator.thickness,
-        )
-        if skip_label:
-            continue
-
-        # Handle labels safely
-        if labels is None or len(labels) == 0:
-            label_text = str(class_id)
-        elif isinstance(class_id, int) and len(labels) > class_id:
-            label_text = labels[class_id]
-        else:
-            label_text = str(class_id)
-
-        label = f"{label_text} {tracker_id}"
-
-        annotator.set_label(
-            image=frame.image, x=x1, y=y1 - 20, color=color.as_bgr(), label=label
-        )
-
-    return frame.image
 
 
 def main():

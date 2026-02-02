@@ -1,0 +1,28 @@
+# go2rtc configuration for Vision AI WebRTC streaming
+# https://github.com/AlexxIT/go2rtc
+
+streams:
+  # Main camera stream - consumed by Cumulocity WebRTC plugin
+  tedge_cam:
+    - http://127.0.0.1:8080/stream  # MJPEG from rpi-vision-ai-processor
+
+api:
+  # HTTP API server (accessed via Cumulocity Remote Access PASSTHROUGH)
+  listen: "127.0.0.1:1984"
+
+webrtc:
+  # WebRTC listener for peer connections
+  listen: ":8555"
+
+  # Optional: Configure STUN/TURN servers for better connectivity
+  # Uncomment and configure if needed for restrictive networks
+  # ice_servers:
+  #   - urls: [stun:stun.l.google.com:19302]
+  #   - urls: [turn:your-turn-server:3478]
+  #     username: your-username
+  #     credential: your-password
+
+# Optional: Enable logging for debugging
+# log:
+#   level: debug
+#   format: text

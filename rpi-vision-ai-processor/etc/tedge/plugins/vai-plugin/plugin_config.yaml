@@ -9,3 +9,12 @@ mqtt:
     status: "CameraServiceStatus"
   client_id: "imx500_ai_camera_publisher"
 enable_frame_encoding: false
+
+# WebRTC Video Streaming Configuration
+streaming:
+  enabled: true
+  mjpeg_port: 8080                # Port for MJPEG server (consumed by go2rtc)
+  quality: 80                     # JPEG quality (1-100)
+  fps: 10                         # Frames per second for MJPEG stream
+  bind_address: "127.0.0.1"       # Localhost only (go2rtc consumes locally)
+  draw_overlays: true             # Draw detection boxes/labels on stream

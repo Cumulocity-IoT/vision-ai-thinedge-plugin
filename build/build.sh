@@ -25,12 +25,42 @@ uv pip install --index-strategy unsafe-best-match -r pyproject.toml
 ARCH=$(dpkg --print-architecture)
 sed -i "s/^Architecture: .*/Architecture: $ARCH/" /tmp/rpi-vision-ai-processor/DEBIAN/control
 
+# 3. Download and install go2rtc binary
+echo "Downloading go2rtc for architecture: $ARCH"
+GO2RTC_VERSION="latest"
+GO2RTC_URL="https://github.com/AlexxIT/go2rtc/releases/latest/download"
+
+# Determine go2rtc binary based on architecture
+case "$ARCH" in
+    arm64|aarch64)
+        GO2RTC_BINARY="go2rtc_linux_arm64"
+        ;;
+    armhf|armv7l)
+        GO2RTC_BINARY="go2rtc_linux_arm"
+        ;;
+    *)
+        echo "Warning: Unsupported architecture $ARCH for go2rtc, skipping download"
+        GO2RTC_BINARY=""
+        ;;
+esac
+
+if [ -n "$GO2RTC_BINARY" ]; then
+    echo "Downloading $GO2RTC_BINARY..."
+    mkdir -p /tmp/rpi-vision-ai-processor/usr/local/bin
+    curl -L -o /tmp/rpi-vision-ai-processor/usr/local/bin/go2rtc \
+        "${GO2RTC_URL}/${GO2RTC_BINARY}"
+    chmod +x /tmp/rpi-vision-ai-processor/usr/local/bin/go2rtc
+    echo "go2rtc downloaded and installed"
+else
+    echo "Skipping go2rtc installation for unsupported architecture"
+fi
+
 mkdir /tmp/dist
 
-# 3. Build the .deb
+# 4. Build the .deb
 dpkg-deb --build /tmp/rpi-vision-ai-processor /tmp/dist
 
-# 4. Rename the package to include distribution
+# 5. Rename the package to include distribution
 cd /tmp/dist
 for deb in *.deb; do
     # Extract package name, version, and arch from the original filename
