@@ -5,6 +5,14 @@ This project provides a thin-edge.io plugin that supports **classification**, **
 
 ## Usage
 
+### Requirements
+
+* Raspberry PI with Raspbian/Debian **Bookworm** or **Trixie**
+* Python >= 3.11
+* thin-edge.io (tested with > 1.4.0) connected to Cumulocity
+* AI Camera with IMX500 
+
+All additional dependencies (e.g. IMX500 libs, ffmpeg) 
 ### Deploying 
 Make sure thin-edge.io is installed on the target device and connected to Cumulocity.
 
