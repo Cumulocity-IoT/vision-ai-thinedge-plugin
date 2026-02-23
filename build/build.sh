@@ -53,11 +53,13 @@ if [ -n "$GO2RTC_BINARY" ]; then
     echo "go2rtc downloaded and installed"
 else
     echo "Skipping go2rtc installation for unsupported architecture"
-fi
-
-mkdir /tmp/dist
 
 # 4. Build the .deb
+mkdir /tmp/dist
+# Add python3-openexr dependency for Trixie only
+if [ "$DISTRO" = "trixie" ]; then
+    sed -i "s/Depends: \(.*\), imx500-all/Depends: \1, python3-openexr, imx500-all/" /tmp/rpi-vision-ai-processor/DEBIAN/control
+fi
 dpkg-deb --build /tmp/rpi-vision-ai-processor /tmp/dist
 
 # 5. Rename the package to include distribution

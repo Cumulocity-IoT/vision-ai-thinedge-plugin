@@ -352,6 +352,12 @@ Available targets in the justfile:
 * build-aarch64
 * build-all
 
+The builds are by default for Debian *Bookworm*. To build for *Trixie' add -trixie. I.e.
+
+* build-arm32-trixie
+* build-aarch64-trixie
+* build-all-trixie
+
 ##  Licensing
 This project is licensed under the Apache 2.0 license - see https://www.apache.org/licenses/LICENSE-2.0
 
