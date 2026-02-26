@@ -17,4 +17,10 @@ cameras:
       aspect_ratio_thresh: 3.0
       min_box_area: 1.0
       mot20: False
+    # WebRTC Video Streaming Configuration
+    # Streams raw BGR24 video with detection overlays (bounding boxes, labels, tracker IDs, keypoints)
+    # External encoder (ffmpeg via go2rtc) reads from pipe and encodes to H.264
+    streaming:
+      enabled: true
+      stream_pipe: "/tmp/vai_raw_stream.pipe"  # Named pipe for raw video output (BGR24 format)
 

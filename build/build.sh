@@ -39,8 +39,8 @@ case "$ARCH" in
         GO2RTC_BINARY="go2rtc_linux_arm"
         ;;
     *)
-        echo "Warning: Unsupported architecture $ARCH for go2rtc, skipping download"
-        GO2RTC_BINARY=""
+        echo "Warning: Unsupported architecture $ARCH"
+        exit 1
         ;;
 esac
 
@@ -53,6 +53,7 @@ if [ -n "$GO2RTC_BINARY" ]; then
     echo "go2rtc downloaded and installed"
 else
     echo "Skipping go2rtc installation for unsupported architecture"
+fi
 
 # 4. Build the .deb
 mkdir /tmp/dist

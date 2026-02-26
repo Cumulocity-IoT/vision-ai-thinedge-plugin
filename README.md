@@ -53,7 +53,7 @@ E.g. for a model named "cup-detection" the tree looks like something like this:
 The version file is optional and used for model management via Cumulocity. Any folder without it won't be 
 recognized as manageable model.
 
-Additionaly, as **metadata.yaml** can be added to the folder. This can be used to overwrite any of the settings in the metadata section of the camera_config.yaml. It is intended to package model-specific details (type, post-processing steps, framerate) with the model.
+Additionally, a **metadata.yaml** can be added to the folder. This can be used to overwrite any of the settings in the metadata section of the camera_config.yaml. It is intended to package model-specific details (type, post-processing steps, framerate) with the model.
 
 ### Deploy Model
 
@@ -137,6 +137,9 @@ cameras:
       aspect_ratio_thresh: 3.0
       min_box_area: 1.0
       mot20: False
+    streaming:
+      enabled: False
+      stream_pipe: "/tmp/vai_raw_stream.pipe"
 
 ```
 
@@ -195,7 +198,7 @@ This works similar to image capturing, just with the *c8y_VideoCapture* type. Th
 }
 ```
 
-This will record and produce an mp4 file which will be stopped and uploaded after \<duration\> seconds. 
+This will record and produce an mp4 file which will be stopped and uploaded after <duration> seconds. 
 
 #### Local on the Pi via MQTT
 
@@ -304,35 +307,74 @@ This is an array of Detection objects with bounding boxes and keypoints for each
 Each keypoint is an array containing: `[label, x_coordinate, y_coordinate, confidence_score]`.
 
 
-## Show Preview Window ##
+## Stream Camera Output
 
-**Note:** This configuration is mainly useful for demo installations and debugging. Displaying the frames on a screen will decrease the performance, requires increased privileges and may cause issues.
+The plugin provides **H.264 streaming with AI detection overlays** via WebRTC. Bounding boxes, labels, tracker IDs, and keypoints are drawn directly on the video stream.
 
-You need to change the systemd service as well as the plugin_config.yaml:
+### Implementation
 
-1. Enable the service to use the display session of your user
+If streaming is enabled for the camera, the image stream will be copied to a [named pipe](https://en.wikipedia.org/wiki/Named_pipe) under */tmp/vai_raw_stream.pipe* by a seperate thread in the application. The thread will  translate the frame to BGR format and draw overlays and labels on it before passing it to the pipe.
+Any other process can connect to the pipe by simply reading from the file system. 
 
-    * edit */etc/systemd/system/rpi-vision-ai-processor.service* - you might have to use sudo to make sure you have enough rights
-    * Comment in the Environment Variables to allow the display sharing with your pi user
-      ```bash
-      Environment="DISPLAY=:0"
-      Environment=XAUTHORITY=/home/pi/.Xauthority
-      ```
-    * Update the User to be root (instead of tedge) 
-      ```bash
-      User=root
-      ````
-    * Save the file
-    * reload the systemctl daemon:
-      ```bash
-      sudo systemctl daemon-reload
-      sudo systemctl restart rpi-vision-ai-processor
-      ```
-2. Set the plugin to use the preview window
-    * edit */etc/tedge/plugins/vai-plugin/plugin_config.yaml*
-    * add ``show_preview: true`` (for window) or ``show_fullscreen: true`` (for fullscreen) at the end of the file and make sure to not have any whitespace before it
-    * save the file
-    
+The go2rtc binary runs as service and is configured to read from the pipe and produce a webrtc output. The actual reading and translating is done by **ffmpeg**, before the stream is handed to go2rtc. With this setup WebRTC clients can connect to the go2rtc local port (1984) on the system to see the stream.
+
+go2rtc will bind **only to localhost** by default. This means you can open a browser and navigate to localhost:1984 to see all go2rtc webstream and then click "stream" to see the live feed.
+To make this work with external users
+
+**Note**
+* This setup means only one process can read the image data. I.e. if you are streaming via WebRTC with the default go2rtc setup, no other process will be able to read from the pipe directly at the same time.  
+* Go2Rtc does support multiple consumers of the same WebRTC stream - i.e. you should be able to watch the stream in multiple browsers.
+
+### Troubleshooting the stream
+
+1. Check services are running
+   ```sh
+   sudo systemctl status rpi-vision-ai-processor go2rtc
+   ```
+
+2. Make sure you enabled Streaming in */etc/tedge/plugins/camera_config.yaml*: 
+    * in the  streaming section set **enabled** to "True" if not set 
+    * make sure the **stream_pipe** is set to */tmp/vai_raw_stream.pipe*
+
+3. Wait for startup of the rpi-vision-processor
+
+4. Verify named pipe was created
+   ```sh
+   ls -l /tmp/vai_raw_stream.pipe
+   ```
+         
+5. Check go2rtc is running
+   ```sh
+   curl http://localhost:1984/api/streams
+   ```
+   This should show `tedge_cam` with active producers/consumers:
+   ```json
+   {"tedge_cam":{"producers":[{"url":"ffmpeg:/tmp/vai_raw_stream.pipe#video=h264#hardware=v4l2m2m#input=pipe"}],"consumers":null}}
+   ```
+
+6. Check the output of go2rtc for errors when opening the WebRTC connection
+    ```sh
+    journalctl -u go2rtc.service
+    ```
+   **Note**: The go2rtc reader script automatically retries with each new  connection, so you don't need to restart go2rtc when stopping/starting the stream.
+
+9. **View the stream in Cumulocity**
+   - Open Cumulocity Device Management
+   - Navigate to your device
+   - Go to the "Webcam" tab
+   - Click Play
+   - You should see the live video with detection overlays after a couple of seconds
+
+
+### Stream Configuration
+
+Default settings in `camera_config.yaml` for each camera:
+```yaml
+streaming:
+  enabled: true
+  stream_pipe: "/tmp/vai_raw_stream.pipe"  # Named pipe for go2rtc
+```
+
 ## Building the Debian Package
 Make sure **Docker** is installed. The build will setup emulation for arm32/64 and create docker images that are used as build containers on your machine
 
@@ -352,7 +394,7 @@ Available targets in the justfile:
 * build-aarch64
 * build-all
 
-The builds are by default for Debian *Bookworm*. To build for *Trixie' add -trixie. I.e.
+The builds are by default for Debian *Bookworm*. To build for *Trixie* add -trixie. I.e.
 
 * build-arm32-trixie
 * build-aarch64-trixie

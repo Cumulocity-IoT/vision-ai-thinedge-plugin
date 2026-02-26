@@ -15,10 +15,10 @@ RestartSec=5s
 
 # Security hardening
 NoNewPrivileges=true
-PrivateTmp=true
+PrivateTmp=false
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/log/tedge/vai-plugin
+ReadWritePaths=/var/log/tedge/vai-plugin /tmp
 
 # Logging
 StandardOutput=journal

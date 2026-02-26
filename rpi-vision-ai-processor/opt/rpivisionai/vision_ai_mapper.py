@@ -108,10 +108,8 @@ def on_connect(client, userdata, flags, rc):
     client.subscribe("te/device/+///cmd/activate_model/+")
     client.subscribe("te/device/+///cmd/image_capture/+")
     client.subscribe("te/device/+///cmd/video_capture/+")
-    client.subscribe("te/device/+///cmd/video_stream/+")
     client.subscribe("vai/+/image/+/result")
     client.subscribe("vai/+/video/+/result")
-    client.subscribe("vai/+/stream/+/result")
     client.subscribe("vai/+/model/activate/+/result")
     log.info("Connected MQTT subscriber")
 
@@ -148,14 +146,6 @@ def on_message(client, userdata, msg):
                 mqtt_client.publish(
                     f"vai/{camera_id}/video/{op_id}",
                     json.dumps(payload["c8y_VideoCapture"]),
-                    retain=True,
-                )
-            elif command == "video_stream":
-                # Video streaming operation - forward to processor
-                stream_config = payload.get("c8y_VideoStream", {})
-                mqtt_client.publish(
-                    f"vai/{camera_id}/stream/{op_id}",
-                    json.dumps(stream_config),
                     retain=True,
                 )
             payload["status"] = "executing"
@@ -215,23 +205,6 @@ def on_message(client, userdata, msg):
             handle_video_error(
                 op_id, camera_id, "Could not send or parse video result message"
             )
-
-    # handle stream results
-    elif stream_result_match := re.match(r"vai/([^/]+)/stream/([^/]+)/result", msg.topic):
-        camera_id, op_id = stream_result_match.groups()
-        try:
-            payload = json.loads(msg.payload)
-            operation_result = OperationResult(**payload)
-            if operation_result.status == "successful":
-                handle_stream_success(op_id, camera_id, operation_result.result)
-            else:
-                handle_stream_error(op_id, camera_id, operation_result.failure_reason)
-        except Exception as e:
-            log.error(e)
-            handle_stream_error(
-                op_id, camera_id, "Could not send or parse stream result message"
-            )
-
 
 def handle_image_success(opid, camera_id, filename):
     """Handle successful image capture by uploading to thin-edge and cleaning up."""
@@ -326,44 +299,6 @@ def handle_video_error(opid, camera_id, failure_reason):
     mqtt_client.publish(
         f"te/device/{camera_id}///cmd/video_capture/{opid}", json.dumps(original_op)
     )
-
-
-def handle_stream_success(opid, camera_id, result):
-    """
-    Handle successful stream operation.
-
-    Args:
-        opid: Operation ID
-        camera_id: Camera identifier
-        result: Result data (URL, port info, etc.)
-    """
-    original_op = operations_in_progress.get(opid)
-    if original_op is None:
-        log.error(f"handle_stream_success: Unknown operation ID {opid}")
-        return
-    original_op["status"] = "successful"
-
-    # Add stream info to operation result if available
-    if result:
-        log.info(f"Stream started successfully: {result}")
-
-    mqtt_client.publish(
-        f"te/device/{camera_id}///cmd/video_stream/{opid}", json.dumps(original_op)
-    )
-
-
-def handle_stream_error(opid, camera_id, failure_reason):
-    """Handle failed stream operation."""
-    original_op = operations_in_progress.get(opid)
-    if original_op is None:
-        log.error(f"handle_stream_error: Unknown operation ID {opid}")
-        return
-    original_op["status"] = "failed"
-    original_op["failureReason"] = failure_reason
-    mqtt_client.publish(
-        f"te/device/{camera_id}///cmd/video_stream/{opid}", json.dumps(original_op)
-    )
-
 
 def clean_operation(op_id, topic):
     """Remove completed operation from tracking and clear retained MQTT message."""

@@ -9,7 +9,7 @@ import threading
 import time
 import base64
 from datetime import datetime
-from typing import List, Optional
+from typing import Optional
 from dataclasses import dataclass
 
 import numpy as np
@@ -19,27 +19,18 @@ import cv2
 from picamera2.devices import IMX500
 from picamera2.devices.imx500 import NetworkIntrinsics
 
-from mjpeg_server import MJPEGServer
+from overlay_stream import OverlayStreamServer
 
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 sys.path.append("modlib")
 from modlib.apps.tracker.byte_tracker import BYTETracker
-from modlib.apps.annotate import ColorPalette, Annotator
 from modlib.devices import AiCamera
 
-from modlib.models.model import COLOR_FORMAT, MODEL_TYPE, Model
 from modlib.devices.frame import Frame
 from modlib.models.results import Classifications, Detections, Poses
-from modlib.models.post_processors import (
-    pp_od_bscn,
-    pp_od_bcsn,
-    pp_cls,
-    pp_cls_softmax,
-    pp_posenet,
-    pp_yolo_pose_ultralytics,
-)
+from models import ClassificationModel, DetectionModel, PoseEstimationModel
 
 # Configuration
 DAEMON_SERVICE = (
@@ -88,12 +79,8 @@ current_config = {}
 # current running recording operation, if any
 video_op: str | None
 
-# MJPEG streaming server for WebRTC (via go2rtc)
-mjpeg_server: MJPEGServer | None = None
-mjpeg_thread: threading.Thread | None = None
-current_detections = None  # Shared detections for MJPEG overlay
-labels_for_stream = None  # Shared labels for MJPEG overlay
-
+# Shared detections and labels for streaming overlays
+current_detections = None  # Latest detections
 
 def ensure_dir(path):
     """Ensure that a directory exists, creating it if necessary."""
@@ -266,7 +253,6 @@ def subscribe_to_topics():
     """Subscribe to MQTT topics after all initialization is complete."""
     mqtt_client.subscribe("vai/+/image/+")
     mqtt_client.subscribe("vai/+/video/+")
-    mqtt_client.subscribe("vai/+/stream/+")
     mqtt_client.subscribe("vai/+/model/activate/+")
     log.info("Subscribed to MQTT topics")
 
@@ -274,116 +260,39 @@ def subscribe_to_topics():
 # Object Detection Logic
 
 
-def start_stream_operation(camera_id: str, op_id: str, config: dict):
+def start_stream_operation(config: dict, labels):
     """
-    Start MJPEG server for go2rtc consumption.
+    Start Raw streaming with detection overlays for go2rtc consumption.
 
     Args:
         camera_id: Camera identifier
-        op_id: Operation ID for tracking
-        config: Configuration dict with port, quality, fps
+        config: Configuration dict with bitrate, resolution, fps
     """
-    global mjpeg_server, mjpeg_thread
 
-    log.info(f"Starting stream operation for camera {camera_id}, op {op_id}")
-
-    # Check if already running
-    if mjpeg_server is not None:
-        error_msg = "Stream already running"
-        log.warning(error_msg)
-        mqtt_client.publish(
-            f"vai/{camera_id}/stream/{op_id}/result",
-            json.dumps({"status": "failed", "reason": error_msg}),
-        )
-        return
-
-    # Extract config with defaults
-    port = config.get("port", current_config.get("streaming", {}).get("mjpeg_port", 8080))
-    quality = config.get("quality", current_config.get("streaming", {}).get("quality", 80))
-    fps = config.get("fps", current_config.get("streaming", {}).get("fps", 10))
-
-    log.info(f"MJPEG server config: port={port}, quality={quality}, fps={fps}")
+    log.info(f"Starting Raw stream operation for camera {config['id']}")
 
     # Create and start server
     try:
-        mjpeg_server = MJPEGServer(
-            port=port,
-            quality=quality,
-            fps=fps,
+        path = config['streaming'].get('stream_pipe', '/tmp/vai_raw_stream.pipe')
+        stream_server = OverlayStreamServer(
             frame_lock=frame_lock,
             get_latest_frame=lambda: latest_frame,
             get_current_detections=lambda: current_detections,
-            get_labels=lambda: labels_for_stream,
+            labels=labels,
+            output_path=path,
+            draw_overlays=True
         )
-        mjpeg_thread = threading.Thread(
-            target=mjpeg_server.serve_forever, daemon=True
-        )
-        mjpeg_thread.start()
 
-        log.info(f"MJPEG server started successfully on port {port}")
-
-        # Publish success
-        mqtt_client.publish(
-            f"vai/{camera_id}/stream/{op_id}/result",
-            json.dumps({
-                "status": "successful",
-                "port": port,
-                "url": f"http://127.0.0.1:{port}/stream",
-                "info": "Stream available via Cumulocity Remote Access"
-            }),
+        stream_thread = threading.Thread(
+            target=stream_server.serve_forever, daemon=True
         )
+        stream_thread.start()
+
+        log.info(f"Raw stream with overlays started to {path}")
+
     except Exception as e:
-        error_msg = f"Failed to start MJPEG server: {e}"
+        error_msg = f"Failed to start Raw stream: {e}"
         log.error(error_msg, exc_info=True)
-        mqtt_client.publish(
-            f"vai/{camera_id}/stream/{op_id}/result",
-            json.dumps({"status": "failed", "reason": error_msg}),
-        )
-
-
-def stop_stream_operation(camera_id: str, op_id: str):
-    """
-    Stop MJPEG server.
-
-    Args:
-        camera_id: Camera identifier
-        op_id: Operation ID for tracking
-    """
-    global mjpeg_server, mjpeg_thread
-
-    log.info(f"Stopping stream operation for camera {camera_id}, op {op_id}")
-
-    if mjpeg_server is None:
-        error_msg = "No stream running"
-        log.warning(error_msg)
-        mqtt_client.publish(
-            f"vai/{camera_id}/stream/{op_id}/result",
-            json.dumps({"status": "failed", "reason": error_msg}),
-        )
-        return
-
-    # Stop server
-    try:
-        mjpeg_server.shutdown()
-        if mjpeg_thread and mjpeg_thread.is_alive():
-            mjpeg_thread.join(timeout=5)
-        mjpeg_server = None
-        mjpeg_thread = None
-
-        log.info("MJPEG server stopped successfully")
-
-        # Publish success
-        mqtt_client.publish(
-            f"vai/{camera_id}/stream/{op_id}/result",
-            json.dumps({"status": "successful"}),
-        )
-    except Exception as e:
-        error_msg = f"Error stopping MJPEG server: {e}"
-        log.error(error_msg, exc_info=True)
-        mqtt_client.publish(
-            f"vai/{camera_id}/stream/{op_id}/result",
-            json.dumps({"status": "failed", "reason": error_msg}),
-        )
 
 
 # Define MQTT callbacks
@@ -441,23 +350,6 @@ def on_message(client, userdata, msg):
             video_match.group(1), video_match.group(2), duration, framerate
         )
         return
-    if stream_match := re.match(r"vai/([^/]+)/stream/([^/]+)", msg.topic):
-        camera_id = stream_match.group(1)
-        op_id = stream_match.group(2)
-        log.info(f"Stream operation: camera={camera_id}, op={op_id}, payload={payload}")
-
-        # Check if this is a stop request
-        try:
-            data = json.loads(payload) if payload.strip() else {}
-            if not data or data.get("action") == "stop":
-                stop_stream_operation(camera_id, op_id)
-            else:
-                start_stream_operation(camera_id, op_id, data)
-        except (ValueError, json.JSONDecodeError) as e:
-            log.warning(f"Invalid JSON in stream operation: {e}. Treating as start.")
-            start_stream_operation(camera_id, op_id, {})
-        return
-
 
 def activate_model(device, model_name):
     """Write the model name to the camera configuration file."""
@@ -517,7 +409,7 @@ def detections_to_json_list(
 
 def parse_detections(camera_config, device, labels, model_type):
     """Parse and process detections from the camera stream, publishing results to MQTT."""
-    global latest_frame, frame_counter, current_detections, labels_for_stream
+    global latest_frame, frame_counter, current_detections
 
     if model_type in ("object detection", "pose detection"):
         tracker = BYTETracker(
@@ -564,10 +456,7 @@ def parse_detections(camera_config, device, labels, model_type):
                         if hasattr(detections, "keypoints"):
                             detections.keypoints /= w
 
-                # Store detections for MJPEG streaming server
-                # All annotation/drawing logic is handled by mjpeg_server.py
                 current_detections = detections
-                labels_for_stream = labels
                 # Publish detected object event if conditions are met
                 json_objects = detections_to_json_list(detections, labels)
                 if current_config.get('enable_frame_encoding', False):
@@ -693,107 +582,6 @@ def start_health_checks():
     threading.Thread(target=publish_periodically, daemon=True).start()
 
 
-class ClassificationModel(Model):
-    """Model class for classification tasks."""
-
-    def __init__(self, custom_model_file, labels, camera_config):
-        """Initialize the classification model with file path, labels, and configuration."""
-        super().__init__(
-            model_file=custom_model_file,
-            model_type=MODEL_TYPE.RPK_PACKAGED,
-            color_format=COLOR_FORMAT.RGB,
-            preserve_aspect_ratio=False,
-        )
-        if labels is None:
-            log.warning("No labels file provided for classification model. Using empty labels.")
-            self.labels = np.array([])
-        else:
-            try:
-                self.labels = np.genfromtxt(labels, dtype=str, delimiter="\n", ndmin=1)
-            except (OSError, ValueError) as e:
-                log.error(f"Failed to load labels from {labels}: {e}")
-                raise ValueError(f"Failed to load labels file: {e}")
-        self.camera_config = camera_config
-
-    def pre_process(self, image: np.ndarray) -> np.ndarray:
-        """Pre-process input image before inference."""
-        raise NotImplementedError("Pre-processing not implemented for this model.")
-
-    def post_process(self, output_tensors: List[np.ndarray]) -> Classifications:
-        """Post-process output tensors to generate classification results."""
-        if self.camera_config["metadata"].get("softmax", None) is True:
-            return pp_cls_softmax(output_tensors)
-        return pp_cls(output_tensors)
-
-
-class DetectionModel(Model):
-    """Model class for object detection tasks."""
-
-    def __init__(self, custom_model_file, labels, camera_config):
-        """Initialize the detection model with file path, labels, and configuration."""
-        super().__init__(
-            model_file=custom_model_file,
-            model_type=MODEL_TYPE.RPK_PACKAGED,
-            color_format=COLOR_FORMAT.RGB,
-            preserve_aspect_ratio=False,
-        )
-        if labels is None:
-            log.warning("No labels file provided for detection model. Using empty labels.")
-            self.labels = np.array([])
-        else:
-            try:
-                self.labels = np.genfromtxt(labels, dtype=str, delimiter="\n", ndmin=1)
-            except (OSError, ValueError) as e:
-                log.error(f"Failed to load labels from {labels}: {e}")
-                raise ValueError(f"Failed to load labels file: {e}")
-        self.camera_config = camera_config
-
-    def pre_process(self, image: np.ndarray) -> np.ndarray:
-        """Pre-process input image before inference."""
-        raise NotImplementedError("Pre-processing not implemented for this model.")
-
-    def post_process(self, output_tensors: List[np.ndarray]) -> Detections:
-        """Post-process output tensors to generate detection results."""
-        detections: Detections
-        if self.camera_config["metadata"].get("output_order", "bcsn") == "bscn":
-            detections = pp_od_bscn(output_tensors)
-        else:
-            detections = pp_od_bcsn(output_tensors)
-        return detections
-
-
-class PoseEstimationModel(Model):
-    """Model class for pose estimation tasks."""
-
-    def __init__(self, custom_model_file, labels, camera_config):
-        """Initialize the pose estimation model with file path, labels, and configuration."""
-        super().__init__(
-            model_file=custom_model_file,
-            model_type=MODEL_TYPE.RPK_PACKAGED,
-            color_format=COLOR_FORMAT.RGB,
-            preserve_aspect_ratio=False,
-        )
-        if labels is None:
-            log.warning("No labels file provided for pose estimation model. Using empty labels.")
-            self.labels = np.array([])
-        else:
-            try:
-                self.labels = np.genfromtxt(labels, dtype=str, delimiter="\n", ndmin=1)
-            except (OSError, ValueError) as e:
-                log.error(f"Failed to load labels from {labels}: {e}")
-                raise ValueError(f"Failed to load labels file: {e}")
-        self.camera_config = camera_config
-
-    def pre_process(self, image: np.ndarray) -> np.ndarray:
-        """Pre-process input image before inference."""
-        raise NotImplementedError("Pre-processing not implemented for this model.")
-
-    def post_process(self, output_tensors: List[np.ndarray]) -> Poses:
-        """Post-process output tensors to generate pose estimation results."""
-        return pp_yolo_pose_ultralytics(output_tensors)
-        # return pp_posenet(output_tensors)
-
-
 def get_model_type(model_file, camera_config):
     """Determine the model type from configuration or intrinsics."""
     # First try to get modeltype from metadata
@@ -906,6 +694,8 @@ def start_model(camera_config):
         name=f"DetectionThread-{camera_config['id']}",
     )
     detection_thread.start()
+    if "streaming" in camera_config and camera_config["streaming"].get("enabled", False):
+        start_stream_operation(camera_config, labels)
     log.info(f"Started detection daemon thread for camera {camera_config['id']}")
 
 
