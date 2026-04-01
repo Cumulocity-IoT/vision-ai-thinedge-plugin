@@ -209,6 +209,9 @@ def on_message(client, userdata, msg):
 
 def handle_image_success(opid, camera_id, filename):
     """Handle successful image capture by uploading to thin-edge and cleaning up."""
+    if not opid in operations_in_progress:
+        log.info(f"Ignoring image result message for operation {opid}")
+        return
     original_op = operations_in_progress[opid]
     original_op["status"] = "successful"
     device_id = original_op["externalSource"]["externalId"]
@@ -237,6 +240,9 @@ def handle_image_success(opid, camera_id, filename):
 
 def handle_image_error(opid, camera_id, failure_reason):
     """Handle failed image capture operation."""
+    if not opid in operations_in_progress:
+        log.info(f"Ignoring image result message for operation {opid}")
+        return
     original_op = operations_in_progress[opid]
     original_op["status"] = "failed"
     mqtt_client.publish(
@@ -264,6 +270,9 @@ def handle_activate_model_error(opid, camera_id, failure_reason):
 
 def handle_video_success(opid, camera_id, filename):
     """Handle successful video capture by uploading to thin-edge and cleaning up."""
+    if not opid in operations_in_progress:
+        log.info(f"Ignoring video result message for operation {opid}")
+        return
     original_op = operations_in_progress[opid]
     original_op["status"] = "successful"
     device_id = original_op["externalSource"]["externalId"]
@@ -292,6 +301,9 @@ def handle_video_success(opid, camera_id, filename):
 
 def handle_video_error(opid, camera_id, failure_reason):
     """Handle failed video capture operation."""
+    if not opid in operations_in_progress:
+        log.info(f"Ignoring video result message for operation {opid}")
+        return
     original_op = operations_in_progress.get(opid)
     if original_op is None:
         log.error(f"handle_video_error: Unknown operation ID {opid}")

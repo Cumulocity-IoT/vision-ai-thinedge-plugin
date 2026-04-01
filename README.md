@@ -186,6 +186,18 @@ It can be viewed by e.g. going to the event list for the device and checking the
     }
 ```
 
+#### Local on the Pi via MQTT
+
+Send a empty JSON object to the local MQTT topic. The camera-id must match your device
+E.g.:
+
+    tedge mqtt pub 'vai/ai_camera/image/capture' '{}'
+
+This will capture an image from the live stream and give the filename as part of the result details:
+
+    tedge mqtt sub 'vai/#/result'
+    [vai/ai_camera/image/capture/result] {"status": "successful", "id": "capture", "camera_id": "ai_camera", "result": "/tmp/tmp_20260401123533.jpg" }
+
 
 ### Video Capturing
 
