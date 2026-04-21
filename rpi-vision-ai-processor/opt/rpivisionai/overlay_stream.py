@@ -4,20 +4,19 @@ Raw Video Streaming with Detection Overlays for Vision AI Camera.
 This module provides raw video streaming with AI detection overlays:
 - Captures frames from the camera
 - Draws bounding boxes, labels, keypoints, tracker IDs
-- Writes raw BGR frames to a named pipe
-- External ffmpeg process (via go2rtc) reads and encodes the stream
+- Encodes frames as H.264 via an ffmpeg subprocess (hardware-accelerated when available)
+- Pushes an RTSP stream to go2rtc, which serves WebRTC/RTSP to clients
 
 """
-
+from typing import Tuple
+import subprocess
 import time
 import threading
 import logging
-import os
 from typing import Callable, Optional, Any
-import stat
 import cv2
 import numpy as np
-from modlib.apps.annotate import Annotator, ColorPalette
+from modlib.apps.annotate import Annotator, ColorPalette, Color
 from modlib.models.results import Detections, Poses, Classifications
 
 
@@ -28,8 +27,9 @@ class OverlayStreamServer:
     """
     Raw video streaming server with detection overlay support.
 
-    Writes raw BGR24 frames to a named pipe for external encoding.
-    Designed to be consumed by ffmpeg via go2rtc.
+    Encodes BGR24 frames as H.264 via ffmpeg and pushes an RTSP stream to
+    go2rtc. Uses h264_v4l2m2m (Raspberry Pi hardware encoder) when available,
+    falling back to libx264.
     """
 
     def __init__(
@@ -38,38 +38,135 @@ class OverlayStreamServer:
         get_latest_frame: Callable[[], Optional[np.ndarray]],
         get_current_detections: Callable[[], Optional[Any]],
         labels: Optional[list],
-        output_path: str,
+        rtsp_url: str,
+        encoder: str = "h264_v4l2m2m",
         draw_overlays: bool = True,
+        size: Tuple = (640, 480),
+        roi: Tuple = (0, 0, 1, 1)
     ):
         """
         Initialize raw video streaming server with overlay support.
 
         Args:
-
             frame_lock: Thread lock for accessing shared frame data
             get_latest_frame: Callable that returns the latest frame (numpy array)
             get_current_detections: Callable that returns detections object
-            get_labels: Callable that returns labels list
+            labels: List of label strings
+            rtsp_url: RTSP URL to push the encoded stream to (e.g. go2rtc)
+            encoder: ffmpeg video encoder to use (e.g. "h264_v4l2m2m" for Pi hardware, "libx264" for software)
             draw_overlays: Whether to draw detection overlays (default True)
+            size: Output resolution; scaled down to fit within 1020x720
+            roi: Region-of-interest as normalised (x1, y1, x2, y2)
         """
-        self.width = 640
-        self.height = 480
+        max_width, max_height = 1020, 720
+        if size[0] > max_width or size[1] > max_height:
+            scale = min(max_width / size[0], max_height / size[1])
+            self.width = int(size[0] * scale)
+            self.height = int(size[1] * scale)
+        else:
+            self.width = size[0]
+            self.height = size[1]
         self.fps = 15
-        self.output_path = output_path
+        self.rtsp_url = rtsp_url
+        self.encoder = encoder
         self.frame_lock = frame_lock
         self.get_latest_frame = get_latest_frame
         self.get_current_detections = get_current_detections
         self.labels = labels
         self.draw_overlays = draw_overlays
-        self.pipe_fd = None
+        self.ffmpeg_proc: Optional[subprocess.Popen] = None
         self.annotator: Optional[Any] = None
-
+        self.roi = roi
+        # Pre-allocated working buffer — reused every frame to avoid per-frame malloc
+        self._frame_buf: Optional[np.ndarray] = None
         log.info(
-            f"Raw video stream initialized: {self.width}x{self.height} @ {self.fps} fps, output={output_path}"
+            f"Raw video stream initialized: {self.width}x{self.height} @ {self.fps} fps, rtsp_url={rtsp_url}"
         )
 
+    # ------------------------------------------------------------------
+    # ffmpeg management
+    # ------------------------------------------------------------------
+
+    def _build_ffmpeg_cmd(self, encoder: str) -> list:
+        cmd = [
+            "ffmpeg", "-hide_banner", "-loglevel", "warning",
+            "-f", "rawvideo",
+            "-pix_fmt", "bgr24",
+            "-s", f"{self.width}x{self.height}",
+            "-r", str(self.fps),
+            "-i", "pipe:0",
+            "-c:v", encoder,
+            "-b:v", "2000k",
+        ]
+        if encoder == "h264_v4l2m2m":
+            # Hardware encoder only accepts YUV natively; force explicit conversion
+            # so ffmpeg doesn't pick a wrong intermediate format automatically.
+            # h264_mp4toannexb converts AVCC (length-prefixed) → Annex-B (start codes)
+            # which dump_extra requires to inject SPS/PPS before every IDR frame.
+            cmd += ["-vf", "format=yuv420p", "-bsf:v", "dump_extra"]
+        elif encoder == "libx264":
+            cmd += ["-vf", "format=yuv420p", "-preset", "ultrafast", "-tune", "zerolatency", "-bsf:v", "dump_extra"]
+        # Keyframe every 2 seconds — clients need a keyframe to start decoding.
+        cmd += ["-g", str(self.fps * 2)]
+        cmd += ["-f", "rtsp", "-rtsp_transport", "tcp", self.rtsp_url]
+        return cmd
+
+    @staticmethod
+    def _drain_stderr(proc: subprocess.Popen) -> None:
+        """Read ffmpeg stderr line-by-line so the pipe never fills and blocks ffmpeg."""
+        try:
+            for raw in proc.stderr:  # type: ignore[union-attr]
+                line = raw.decode(errors="replace").rstrip()
+                if line:
+                    log.debug("ffmpeg: %s", line)
+        except Exception:
+            pass
+
+    def _start_ffmpeg(self, encoder: str) -> None:
+        cmd = self._build_ffmpeg_cmd(encoder)
+        log.info(f"Starting ffmpeg ({encoder}): {' '.join(cmd)}")
+        self.ffmpeg_proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+        threading.Thread(
+            target=self._drain_stderr,
+            args=(self.ffmpeg_proc,),
+            daemon=True,
+            name="ffmpeg-stderr-drain",
+        ).start()
+
+    def _restart_ffmpeg(self, encoder: str, retry_delay: float = 2.0) -> None:
+        if self.ffmpeg_proc is not None:
+            try:
+                self.ffmpeg_proc.stdin.close()
+            except Exception:
+                pass
+            try:
+                self.ffmpeg_proc.terminate()
+            except Exception:
+                pass
+            try:
+                self.ffmpeg_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    self.ffmpeg_proc.kill()
+                    self.ffmpeg_proc.wait()
+                except Exception:
+                    pass
+            self.ffmpeg_proc = None
+        log.info(f"Restarting ffmpeg in {retry_delay:.0f}s...")
+        time.sleep(retry_delay)
+        self._start_ffmpeg(encoder)
+
+    # ------------------------------------------------------------------
+    # Overlay annotation
+    # ------------------------------------------------------------------
+
     def annotate_frame(
-        self, frame: np.ndarray, detections: Any, labels: Optional[list], annotator: Any
+        self, frame: np.ndarray, detections: Detections|Poses|Classifications, labels: Optional[list], annotator: Any
     ) -> np.ndarray:
         """
         Draw detection boxes, labels, keypoints on frame.
@@ -87,6 +184,14 @@ class OverlayStreamServer:
             return frame
 
         h, w, _ = frame.shape
+        if self.roi != (0, 0, 1, 1):
+            cv2.rectangle(
+                img=frame,
+                pt1=(self.roi[0] * self.width, self.roi[1] * self.height),
+                pt2=(self.roi[2] * self.width, self.roi[3] * self.height),
+                color=Color.red(),
+                thickness=annotator.thickness,
+            )
 
         # Handle Poses - draw keypoints first
         if isinstance(detections, Poses):
@@ -96,6 +201,7 @@ class OverlayStreamServer:
                 log.debug(f"Could not draw keypoints: {e}")
         if isinstance(detections, Classifications):
             return frame
+
         # Draw bounding boxes and labels
         for i in range(len(detections)):
             try:
@@ -163,80 +269,33 @@ class OverlayStreamServer:
 
         return frame
 
-    def _create_named_pipe(self):
-        """Create named pipe for raw video output if it doesn't exist."""
-
-        # Check if pipe already exists and is valid
-        if os.path.exists(self.output_path):
-            # Check if it's actually a named pipe
-            if stat.S_ISFIFO(os.stat(self.output_path).st_mode):
-                log.info(f"Named pipe already exists: {self.output_path}")
-                return
-            else:
-                # It exists but is not a pipe, remove it
-                try:
-                    os.remove(self.output_path)
-                    log.warning(f"Removed non-pipe file at: {self.output_path}")
-                except Exception as e:
-                    log.error(f"Could not remove existing file: {e}")
-                    raise
-
-        # Create the pipe
-        try:
-            os.mkfifo(self.output_path)
-            log.info(f"Created named pipe: {self.output_path}")
-        except FileExistsError:
-            # Race condition - pipe was created between check and creation
-            log.info(f"Named pipe already exists: {self.output_path}")
-        except Exception as e:
-            log.error(f"Failed to create named pipe: {e}")
-            raise
-
-    def _open_pipe(self):
-        """
-        Open the named pipe for writing.
-
-        This will block until a reader (e.g., ffmpeg via go2rtc) opens the pipe.
-        """
-        log.info(f"Opening named pipe for writing: {self.output_path}")
-        log.info("Note: This will block until a reader connects to the pipe")
-
-        try:
-            # Open in write-binary mode, unbuffered
-            self.pipe_fd = open(self.output_path, 'wb', buffering=0)
-            log.info("Named pipe opened successfully")
-        except Exception as e:
-            log.error(f"Failed to open named pipe: {e}")
-            raise
+    # ------------------------------------------------------------------
+    # Main loop
+    # ------------------------------------------------------------------
 
     def serve_forever(self):
         """Start the raw video streaming server with overlays."""
         try:
-            # Create named pipe
-            self._create_named_pipe()
-
-            # Create annotator for overlays
             if self.draw_overlays:
-                    self.annotator = Annotator(
-                        color=ColorPalette.default(),
-                        thickness=2,
-                        text_thickness=2,
-                        text_scale=0.8,
-                    )
-                    log.info("Annotator created for detection overlay")
+                self.annotator = Annotator(
+                    color=ColorPalette.default(),
+                    thickness=2,
+                    text_thickness=2,
+                    text_scale=0.8,
+                )
+                log.info("Annotator created for detection overlay")
 
-            # Open pipe (will block until reader connects)
-            self._open_pipe()
+            self._start_ffmpeg(self.encoder)
+            self._frame_buf = np.empty((self.height, self.width, 3), dtype=np.uint8)
 
-            log.info(f"Raw video streaming started: {self.output_path}")
-            log.info(f"Stream settings: {self.width}x{self.height} @ {self.fps}fps (format: raw BGR24)")
-            log.info(f"Reader should use: ffmpeg -f rawvideo -pix_fmt bgr24 -s {self.width}x{self.height} -r {self.fps} -i {self.output_path}")
+            log.info(f"Raw video streaming started → {self.rtsp_url}")
+            log.info(f"Stream settings: {self.width}x{self.height} @ {self.fps}fps (encoder: {self.encoder})")
 
             frame_interval = 1.0 / self.fps
             last_frame_time = time.time()
             frame_count = 0
             dropped_frames = 0
-            last_frame_id = None  # Track if we're getting new frames
+            last_frame_id = None
 
             while True:
                 current_time = time.time()
@@ -255,11 +314,19 @@ class OverlayStreamServer:
 
                 last_frame_time = current_time
 
-                # Get frame, detections, labels (thread-safe)
-                with self.frame_lock:
-                    latest_frame = self.get_latest_frame()
-                    detections = self.get_current_detections()
-                    labels = self.labels
+                # Restart ffmpeg if it crashed
+                if self.ffmpeg_proc is None or self.ffmpeg_proc.poll() is not None:
+                    log.warning("ffmpeg process died, restarting")
+                    self._restart_ffmpeg(self.encoder)
+
+                # Read shared state without locking.
+                # Python reference reads are atomic under the GIL, so there is no
+                # risk of a partial/corrupt read. The detection thread holds
+                # frame_lock for 10 ms per frame (sleep inside the lock); acquiring
+                # it here would starve that loop and stall the camera pipeline.
+                latest_frame = self.get_latest_frame()
+                detections = self.get_current_detections()
+                labels = self.labels
 
                 # Check if frame is available
                 if latest_frame is None or not isinstance(latest_frame, np.ndarray):
@@ -276,26 +343,20 @@ class OverlayStreamServer:
                     )
                     latest_frame = blank
                 else:
-                    # Check if we're getting new frames
                     frame_id = id(latest_frame)
                     if frame_id == last_frame_id:
-                        # Same frame as before - camera might be slow
                         if frame_count > 0 and frame_count % 30 == 0:
                             log.debug("Reusing same frame (camera slower than stream FPS)")
                     last_frame_id = frame_id
 
-                # Make a copy to avoid modifying the original
-                frame_copy = latest_frame.copy()
-
-                # Resize if needed
-                if frame_copy.shape[0] != self.height or frame_copy.shape[1] != self.width:
-                    frame_copy = cv2.resize(frame_copy, (self.width, self.height))
-
-                # Convert RGB to BGR if needed (OpenCV expects BGR)
-                if len(frame_copy.shape) == 3 and frame_copy.shape[2] == 3:
-                    frame_bgr = cv2.cvtColor(frame_copy, cv2.COLOR_RGB2BGR)
+                # Copy into the pre-allocated buffer to avoid a per-frame malloc.
+                # cv2.resize with dst= and np.copyto both write into the existing array.
+                if latest_frame.shape[0] != self.height or latest_frame.shape[1] != self.width:
+                    cv2.resize(latest_frame, (self.width, self.height), dst=self._frame_buf)
                 else:
-                    frame_bgr = frame_copy
+                    np.copyto(self._frame_buf, latest_frame)
+
+                frame_bgr = self._frame_buf
 
                 # Draw detection overlays if enabled
                 if self.draw_overlays and detections is not None and self.annotator is not None:
@@ -306,31 +367,23 @@ class OverlayStreamServer:
                     except Exception as e:
                         log.error(f"Error drawing detections: {e}", exc_info=True)
 
-                # Write raw frame to pipe
+                # Write raw frame to ffmpeg stdin
                 try:
-                    if self.pipe_fd:
-                        # Write frame data directly to pipe
-                        frame_bytes = frame_bgr.tobytes()
-                        self.pipe_fd.write(frame_bytes)
-                        # No need to flush - buffering=0 means unbuffered
-                        frame_count += 1
+                    assert self.ffmpeg_proc is not None and self.ffmpeg_proc.stdin is not None
+                    self.ffmpeg_proc.stdin.write(self._frame_buf.ravel())
+                    self.ffmpeg_proc.stdin.flush()
+                    frame_count += 1
 
-                        if frame_count % 100 == 0:
-                            log.info(f"Streamed {frame_count} frames (dropped: {dropped_frames})")
+                    if frame_count % 100 == 0:
+                        log.info(f"Streamed {frame_count} frames (dropped: {dropped_frames})")
                 except BrokenPipeError:
-                    log.warning("Pipe broken (reader disconnected), restarting stream")
-                    if self.pipe_fd:
-                        try:
-                            self.pipe_fd.close()
-                        except Exception as e:
-                            log.warning(f"Error closing pipe: {e}")
-                        self.pipe_fd = None
-                        self._open_pipe()
-                except IOError as e:
-                    log.error(f"I/O error writing to pipe: {e}")
+                    log.warning("ffmpeg stdin broken (go2rtc disconnected?), restarting ffmpeg")
+                    self._restart_ffmpeg(self.encoder)
+                except OSError as e:
+                    log.error(f"I/O error writing to ffmpeg: {e}")
                     break
                 except Exception as e:
-                    log.error(f"Error writing frame to pipe: {e}")
+                    log.error(f"Error writing frame to ffmpeg: {e}")
                     break
 
         except Exception as e:
@@ -343,14 +396,20 @@ class OverlayStreamServer:
         """Stop the raw video streaming server gracefully."""
         log.info("Shutting down raw video stream...")
 
-        # Close pipe file descriptor
-        if self.pipe_fd:
+        if self.ffmpeg_proc is not None:
             try:
-                self.pipe_fd.close()
-                log.info("Named pipe closed")
-            except Exception as e:
-                log.warning(f"Error closing pipe: {e}")
+                self.ffmpeg_proc.stdin.close()
+            except Exception:
+                pass
+            try:
+                self.ffmpeg_proc.terminate()
+                self.ffmpeg_proc.wait(timeout=5)
+                log.info("ffmpeg process terminated")
+            except Exception:
+                try:
+                    self.ffmpeg_proc.kill()
+                    log.info("ffmpeg process killed")
+                except Exception as e:
+                    log.warning(f"Could not stop ffmpeg: {e}")
 
-        # Don't remove the pipe - it may be reused by go2rtc or other processes
-        # The pipe file will persist until explicitly removed
         log.info("Raw video stream stopped")

@@ -9,12 +9,13 @@ readme = "README.md"
 requires-python = ">=3.9,<=3.13"
 dependencies = [
   "modlib",
-  "paho-mqtt>=2.0"
+  "paho-mqtt>=2.0",
+  "psutil>=5.9"
 ]
 
 [tool.uv.sources]
 modlib = [
-  { git = "https://github.com/SonySemiconductorSolutions/aitrios-rpi-application-module-library", tag = "v1.1.1", marker = "python_version == '3.11'" },
+  { git = "https://github.com/SonySemiconductorSolutions/aitrios-rpi-application-module-library", tag = "v1.3.0", marker = "python_version == '3.11'" },
   { git = "https://github.com/C8Y-Mario/aitrios-rpi-application-module-library", branch = "python3.13", marker = "python_version >= '3.13'" }
 ]
 

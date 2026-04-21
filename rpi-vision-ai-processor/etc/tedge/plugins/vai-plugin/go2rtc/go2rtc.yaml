@@ -3,7 +3,14 @@
 
 streams:
   # Main camera stream - consumed by Cumulocity WebRTC plugin
-  tedge_cam: ffmpeg:/tmp/vai_raw_stream.pipe#video=h264#hardware=v4l2m2m#input=pipe
+  # Python's OverlayStreamServer pushes H.264 RTSP here via ffmpeg.
+  # go2rtc accepts the incoming publish on this path and serves WebRTC/RTSP.
+  tedge_cam:
+
+rtsp:
+  # RTSP server — used only for receiving the pushed stream from ffmpeg (loopback).
+  # Explicit port to avoid relying on go2rtc's default (:8554).
+  listen: "127.0.0.1:8554"
 
 api:
   # HTTP API server (accessed via Cumulocity Remote Access PASSTHROUGH)
@@ -26,5 +33,3 @@ log:
   level: debug
   format: text
 
-ffmpeg:
-  pipe: "-f rawvideo -pix_fmt bgr24 -s 640x480 -r 15 -i {input} -b:v 2000k" 

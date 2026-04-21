@@ -1,5 +1,7 @@
 import argparse
+import gc
 import json
+import tracemalloc
 import logging.config
 import os
 import re
@@ -12,12 +14,12 @@ from datetime import datetime
 from typing import Optional
 from dataclasses import dataclass
 
+import psutil
+
 import numpy as np
 import paho.mqtt.client as mqtt
 import yaml
 import cv2
-from picamera2.devices import IMX500
-from picamera2.devices.imx500 import NetworkIntrinsics
 
 from overlay_stream import OverlayStreamServer
 
@@ -27,10 +29,12 @@ from watchdog.observers import Observer
 sys.path.append("modlib")
 from modlib.apps.tracker.byte_tracker import BYTETracker
 from modlib.devices import AiCamera
-
+from modlib.devices.ai_camera.imx500 import IMX500
 from modlib.devices.frame import Frame
 from modlib.models.results import Classifications, Detections, Poses
 from models import ClassificationModel, DetectionModel, PoseEstimationModel
+
+from picamera2.devices.imx500 import NetworkIntrinsics
 
 # Configuration
 DAEMON_SERVICE = (
@@ -273,14 +277,18 @@ def start_stream_operation(config: dict, labels):
 
     # Create and start server
     try:
-        path = config['streaming'].get('stream_pipe', '/tmp/vai_raw_stream.pipe')
+        rtsp_url = config['streaming'].get('rtsp_url', 'rtsp://localhost:8554/tedge_cam')
+        encoder = config['streaming'].get('encoder', 'h264_v4l2m2m')
         stream_server = OverlayStreamServer(
             frame_lock=frame_lock,
             get_latest_frame=lambda: latest_frame,
             get_current_detections=lambda: current_detections,
             labels=labels,
-            output_path=path,
-            draw_overlays=True
+            rtsp_url=rtsp_url,
+            encoder=encoder,
+            draw_overlays=True,
+            size=(640, 480),
+            roi=(0,0,1,1)
         )
 
         stream_thread = threading.Thread(
@@ -288,7 +296,7 @@ def start_stream_operation(config: dict, labels):
         )
         stream_thread.start()
 
-        log.info(f"Raw stream with overlays started to {path}")
+        log.info(f"Raw stream with overlays started, pushing to {rtsp_url}")
 
     except Exception as e:
         error_msg = f"Failed to start Raw stream: {e}"
@@ -431,10 +439,26 @@ def parse_detections(camera_config, device, labels, model_type):
                         else:
                             frame_to_write = latest_frame
                         video_writer.write(frame_to_write)
+                        del frame_to_write
                 elif is_recording and time.time() >= recording_end_time:
                     stop_video_recording(camera_config["id"], "duration_elapsed")
-                time.sleep(0.01)
             frame_counter = frame_counter + 1
+            if frame_counter % 300 == 0:
+                mem = psutil.Process().memory_info()
+                log.info(
+                    f"[MEM] frame={frame_counter} "
+                    f"rss={mem.rss // 1024 // 1024}MB "
+                    f"vms={mem.vms // 1024 // 1024}MB"
+                )
+                unreachable = gc.collect()
+                log.info(
+                    f"[GC] collected {unreachable} unreachable objects, "
+                    f"garbage={len(gc.garbage)}"
+                )
+            if tracemalloc.is_tracing() and frame_counter % 1500 == 0:
+                snapshot = tracemalloc.take_snapshot()
+                for stat in snapshot.statistics("lineno")[:10]:
+                    log.info(f"[TRACEMALLOC] {stat}")
             detections = frame.detections
 
             if frame.new_detection and isinstance(
@@ -459,6 +483,8 @@ def parse_detections(camera_config, device, labels, model_type):
                 current_detections = detections
                 # Publish detected object event if conditions are met
                 json_objects = detections_to_json_list(detections, labels)
+                encoded_img = None
+                frame_base64 = None
                 if current_config.get('enable_frame_encoding', False):
                     if latest_frame is not None and isinstance(latest_frame, np.ndarray):
                         success, encoded_img = cv2.imencode('.jpg', latest_frame)
@@ -469,22 +495,20 @@ def parse_detections(camera_config, device, labels, model_type):
                                 f"JPEG frame size: {len(encoded_img)} bytes, "
                                 f"Base64 frame size: {sys.getsizeof(frame_base64)} bytes"
                             )
-                    else:
-                        frame_base64 = None
-                else:
-                    frame_base64 = None  # Encoding disabled        
                 full_output = {
                     "frame_id": frame_counter,
                     "frame": f"data:image/jpeg;base64,{frame_base64}" if frame_base64 else None,
                     "timestamp": frame.timestamp,
                     "detections": json_objects,
                 }
+                del encoded_img, frame_base64
                 # Convert to JSON string
                 json_string = json.dumps(full_output, indent=2)
+                del full_output
                 topic = current_config["mqtt"]["topics"]["detection"]
                 if isinstance(detections, Classifications):
                     topic = current_config["mqtt"]["topics"]["classification"]
-                # Publih to MQTT
+                # Publish to MQTT
                 mqtt_client.publish(
                     "/".join(
                         [
@@ -496,6 +520,7 @@ def parse_detections(camera_config, device, labels, model_type):
                     ),
                     json_string,
                 )
+                del json_string
                 log.debug("Detection published to MQTT")
 
 
@@ -658,6 +683,7 @@ def start_model(camera_config):
     try:
         fps = camera_config.get("metadata", {}).get("framerate", 15)
         device = AiCamera(frame_rate=fps)
+        #device.set_input_tensor_cropping((0,0,0.5,0.5))
         device.deploy(model)
     except Exception as e:
         log.error(f"Failed to deploy model to camera {camera_id}: {e}")
@@ -685,18 +711,10 @@ def start_model(camera_config):
     else:
         labels = []
 
-    # Start parse_detections in a separate daemon thread
-    # Daemon threads will be automatically terminated when the main process exits
-    detection_thread = threading.Thread(
-        target=parse_detections,
-        args=(camera_config, device, labels, model_type),
-        daemon=True,  # This ensures the thread is terminated when main process exits
-        name=f"DetectionThread-{camera_config['id']}",
-    )
-    detection_thread.start()
     if "streaming" in camera_config and camera_config["streaming"].get("enabled", False):
         start_stream_operation(camera_config, labels)
-    log.info(f"Started detection daemon thread for camera {camera_config['id']}")
+    log.info(f"Model ready for camera {camera_config['id']}")
+    return (camera_config, device, labels, model_type)
 
 
 def take_picture(camera_id, op_id):
@@ -715,6 +733,7 @@ def take_picture(camera_id, op_id):
     formatted = now.strftime("%Y%m%d%H%M%S")
     filename = f"/tmp/tmp_{formatted}.jpg"
     cv2.imwrite(filename, frame_to_save)
+    del frame_to_save
     log.info("image captured")
     mqtt_client.publish(
         f"vai/{camera_id}/image/{op_id}/result",
@@ -844,6 +863,10 @@ def main():
 
     setup_logging(LOGGING_CONFIG_FILE)
 
+    if os.getenv("VAI_TRACEMALLOC"):
+        tracemalloc.start()
+        log.info("[TRACEMALLOC] enabled — snapshot every 1500 frames")
+
     # Initialize configuration and MQTT connection
     current_config = init_plugin_config()
     init_mqtt(current_config)
@@ -851,14 +874,15 @@ def main():
     # Start health checks
     start_health_checks()
 
-    # Start detection threads for all cameras (these will run as daemon threads)
+    # Initialise all cameras; collect detection args to run on the main thread
+    detection_args_list = []
     for camera in current_config["cameras"]:
         camera_config = current_config["cameras"][camera]
         register_capabilities(camera_config)
         merged_config = update_camera_config(
             camera_config["id"], camera_config["metadata"]["model"], False
         )
-        start_model(merged_config["cameras"][camera])
+        detection_args_list.append(start_model(merged_config["cameras"][camera]))
 
     start_watcher([PLUGIN_CONFIG_FILE, CAMERA_CONFIG_FILE])
 
@@ -866,8 +890,12 @@ def main():
     if mqtt_client.is_connected():
         subscribe_to_topics()
 
+    # Run the first camera's detection loop on the main thread so that
+    # modlib's get_frame() takes the main-thread code path, which clears
+    # the internal _frames buffer after each read and prevents frame accumulation.
+    if detection_args_list:
+        parse_detections(*detection_args_list[0])
+
 
 if __name__ == "__main__":
     main()
-    while True:
-        time.sleep(1)
