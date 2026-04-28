@@ -12,7 +12,7 @@ from typing import Tuple
 import subprocess
 import time
 import threading
-import logging
+import logging 
 from typing import Callable, Optional, Any
 import cv2
 import numpy as np
@@ -28,7 +28,7 @@ class OverlayStreamServer:
     Raw video streaming server with detection overlay support.
 
     Encodes BGR24 frames as H.264 via ffmpeg and pushes an RTSP stream to
-    go2rtc. Uses h264_v4l2m2m (Raspberry Pi hardware encoder) when available,
+    go2rtc. Uses h264_v4l2m2m (Raspberry Pi hardware encoder) whene available,
     falling back to libx264.
     """
 
@@ -184,14 +184,6 @@ class OverlayStreamServer:
             return frame
 
         h, w, _ = frame.shape
-        if self.roi != (0, 0, 1, 1):
-            cv2.rectangle(
-                img=frame,
-                pt1=(self.roi[0] * self.width, self.roi[1] * self.height),
-                pt2=(self.roi[2] * self.width, self.roi[3] * self.height),
-                color=Color.red(),
-                thickness=annotator.thickness,
-            )
 
         # Handle Poses - draw keypoints first
         if isinstance(detections, Poses):
@@ -201,7 +193,8 @@ class OverlayStreamServer:
                 log.debug(f"Could not draw keypoints: {e}")
         if isinstance(detections, Classifications):
             return frame
-
+        if self.roi != (0,0,1,1):
+            detections.compensate_for_roi(self.roi)
         # Draw bounding boxes and labels
         for i in range(len(detections)):
             try:
@@ -358,6 +351,17 @@ class OverlayStreamServer:
 
                 frame_bgr = self._frame_buf
 
+                if self.draw_overlays and self.roi != (0, 0, 1, 1):
+                    pt1=(int(self.roi[0] * self.width),int(self.roi[1] * self.height))
+                    pt2=(int((self.roi[0] + self.roi[2]) * self.width), int((self.roi[1] + self.roi[3]) * self.height))
+                    cv2.rectangle(
+                        img=frame_bgr,
+                        pt1=pt1,
+                        pt2=pt2,
+                        color=Color.red().as_bgr(),
+                        thickness=2,
+                    )
+
                 # Draw detection overlays if enabled
                 if self.draw_overlays and detections is not None and self.annotator is not None:
                     try:
@@ -370,7 +374,7 @@ class OverlayStreamServer:
                 # Write raw frame to ffmpeg stdin
                 try:
                     assert self.ffmpeg_proc is not None and self.ffmpeg_proc.stdin is not None
-                    self.ffmpeg_proc.stdin.write(self._frame_buf.ravel())
+                    self.ffmpeg_proc.stdin.write(self._frame_buf.data)
                     self.ffmpeg_proc.stdin.flush()
                     frame_count += 1
 

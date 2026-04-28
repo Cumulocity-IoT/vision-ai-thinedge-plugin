@@ -10,6 +10,8 @@ cameras:
       bbox_order: yx
       output_order: bscn
       max_detections: 5
+      input_size: [1280, 960]
+      roi: [0,0,1,1]
     tracker:
       track_thresh: 0.25
       track_buffer: 30
@@ -22,6 +24,6 @@ cameras:
     # which serves WebRTC/RTSP to clients.
     streaming:
       enabled: true
+      target_size: [640,480]
       rtsp_url: "rtsp://127.0.0.1:8554/tedge_cam"  # must match go2rtc rtsp.listen address and stream name
       encoder: "libx264"  # ffmpeg encoder: "h264_v4l2m2m" (Pi hardware) or "libx264" (software)
-

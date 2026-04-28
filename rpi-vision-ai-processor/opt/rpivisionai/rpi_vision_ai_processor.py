@@ -57,8 +57,9 @@ CAMERA_CONFIG_FILE = os.getenv("VAI_CAMERA_CONFIG", DEFAULT_CAMERA_CONFIG)
 MODEL_BASE_PATH = os.getenv("VAI_MODEL_BASE_PATH", DEFAULT_MODEL_BASE_PATH)
 
 DEFAULT_DURATION = 10
-DEAFULT_FRAMERATE = 15
-
+DEFAULT_FRAMERATE = 15
+DEFAULT_SIZE = (640, 480)
+DEFAULT_ROI = (0,0,1,1)
 
 log = logging.getLogger(__name__)
 np.set_printoptions(threshold=sys.maxsize)
@@ -279,6 +280,8 @@ def start_stream_operation(config: dict, labels):
     try:
         rtsp_url = config['streaming'].get('rtsp_url', 'rtsp://localhost:8554/tedge_cam')
         encoder = config['streaming'].get('encoder', 'h264_v4l2m2m')
+        target_size= config['streaming'].get('target_size', DEFAULT_SIZE)
+        roi = config.get("metadata", {}).get("roi", DEFAULT_ROI)
         stream_server = OverlayStreamServer(
             frame_lock=frame_lock,
             get_latest_frame=lambda: latest_frame,
@@ -287,8 +290,8 @@ def start_stream_operation(config: dict, labels):
             rtsp_url=rtsp_url,
             encoder=encoder,
             draw_overlays=True,
-            size=(640, 480),
-            roi=(0,0,1,1)
+            size=tuple(target_size),
+            roi=tuple(roi)
         )
 
         stream_thread = threading.Thread(
@@ -344,7 +347,7 @@ def on_message(client, userdata, msg):
     if video_match := re.match(r"vai/([^/]+)/video/([^/]+)", msg.topic):
         log.info(f" topic: {msg.topic}, payload: {payload}")
         duration = DEFAULT_DURATION
-        framerate = DEAFULT_FRAMERATE
+        framerate = DEFAULT_FRAMERATE
         try:
             data = json.loads(payload)
             duration = data.get("duration")
@@ -681,10 +684,12 @@ def start_model(camera_config):
         raise
 
     try:
-        fps = camera_config.get("metadata", {}).get("framerate", 15)
-        device = AiCamera(frame_rate=fps)
-        #device.set_input_tensor_cropping((0,0,0.5,0.5))
+        fps = camera_config.get("metadata", {}).get("framerate", DEFAULT_FRAMERATE)
+        size = camera_config.get("metadata", {}).get("input_size", DEFAULT_SIZE)
+        roi = camera_config.get("metadata", {}).get("roi", DEFAULT_ROI)
+        device = AiCamera(frame_rate=fps, image_size=tuple(size),enable_input_tensor=False)
         device.deploy(model)
+        device.set_input_tensor_cropping(tuple(roi))
     except Exception as e:
         log.error(f"Failed to deploy model to camera {camera_id}: {e}")
         publish_service_status(
