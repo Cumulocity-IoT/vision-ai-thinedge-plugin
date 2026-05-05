@@ -1,6 +1,7 @@
 import argparse
 import gc
 import json
+import queue
 import tracemalloc
 import logging.config
 import os
@@ -65,6 +66,10 @@ log = logging.getLogger(__name__)
 np.set_printoptions(threshold=sys.maxsize)
 
 mqtt_client: mqtt.Client
+
+# Bounded queue for async MQTT publishing — keeps the detection loop from
+# blocking on network I/O when the broker is slow or temporarily unreachable.
+_publish_queue: queue.Queue = queue.Queue(maxsize=200)
 
 latest_frame = None
 frame_lock = threading.Lock()
@@ -235,6 +240,23 @@ def start_watcher(watched_files):
     observer.start()
 
 
+def _mqtt_publisher_thread() -> None:
+    """Background thread that drains _publish_queue and calls mqtt_client.publish().
+
+    Keeps mqtt_client.publish() off the hot detection loop so a slow or
+    temporarily unreachable broker can never stall frame consumption.
+    """
+    while True:
+        item = _publish_queue.get()
+        if item is None:
+            break
+        topic, payload = item
+        try:
+            mqtt_client.publish(topic, payload)
+        except Exception as e:
+            log.warning(f"MQTT publish failed: {e}")
+
+
 def init_mqtt(config):
     """Initialize and connect the MQTT client."""
     global mqtt_client
@@ -251,6 +273,7 @@ def init_mqtt(config):
         config["mqtt"]["broker"], config["mqtt"]["port"], config["mqtt"]["keepalive"]
     )
     mqtt_client.loop_start()
+    threading.Thread(target=_mqtt_publisher_thread, daemon=True, name="mqtt-publisher").start()
     log.info("MQTT client initialized and connected")
 
 
@@ -431,20 +454,28 @@ def parse_detections(camera_config, device, labels, model_type):
     with device as stream:
         frame: Frame
         for frame in stream:
+            frame_to_record = None
+            recording_timed_out = False
             with frame_lock:
                 latest_frame = frame.image
-                if is_recording and time.time() < recording_end_time:
-                    if video_writer is not None:
-                        if latest_frame.shape[2] == 3:
-                            frame_to_write = cv2.cvtColor(
-                                latest_frame, cv2.COLOR_RGB2BGR
-                            )
-                        else:
-                            frame_to_write = latest_frame
-                        video_writer.write(frame_to_write)
-                        del frame_to_write
-                elif is_recording and time.time() >= recording_end_time:
-                    stop_video_recording(camera_config["id"], "duration_elapsed")
+                if is_recording:
+                    if time.time() < recording_end_time:
+                        if video_writer is not None:
+                            if latest_frame.shape[2] == 3:
+                                frame_to_record = cv2.cvtColor(
+                                    latest_frame, cv2.COLOR_RGB2BGR
+                                )
+                            else:
+                                frame_to_record = latest_frame.copy()
+                    else:
+                        recording_timed_out = True
+            # Encode and write outside the lock to avoid stalling the camera pipeline
+            if frame_to_record is not None:
+                if video_writer is not None:
+                    video_writer.write(frame_to_record)
+                del frame_to_record
+            elif recording_timed_out:
+                stop_video_recording(camera_config["id"], "duration_elapsed")
             frame_counter = frame_counter + 1
             if frame_counter % 300 == 0:
                 mem = psutil.Process().memory_info()
@@ -511,20 +542,20 @@ def parse_detections(camera_config, device, labels, model_type):
                 topic = current_config["mqtt"]["topics"]["detection"]
                 if isinstance(detections, Classifications):
                     topic = current_config["mqtt"]["topics"]["classification"]
-                # Publish to MQTT
-                mqtt_client.publish(
-                    "/".join(
-                        [
-                            current_config["mqtt"]["topics"]["base"],
-                            camera_config["id"],
-                            topic,
-                            camera_config["metadata"]["model"],
-                        ]
-                    ),
-                    json_string,
+                full_topic = "/".join(
+                    [
+                        current_config["mqtt"]["topics"]["base"],
+                        camera_config["id"],
+                        topic,
+                        camera_config["metadata"]["model"],
+                    ]
                 )
+                try:
+                    _publish_queue.put_nowait((full_topic, json_string))
+                except queue.Full:
+                    log.warning("MQTT publish queue full, dropping detection")
                 del json_string
-                log.debug("Detection published to MQTT")
+                log.debug("Detection queued for MQTT publish")
 
 
 def get_args():

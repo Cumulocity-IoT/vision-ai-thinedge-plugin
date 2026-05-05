@@ -18,7 +18,7 @@ import cv2
 import numpy as np
 from modlib.apps.annotate import Annotator, ColorPalette, Color
 from modlib.models.results import Detections, Poses, Classifications
-
+import copy
 
 log = logging.getLogger(__name__)
 
@@ -193,8 +193,8 @@ class OverlayStreamServer:
                 log.debug(f"Could not draw keypoints: {e}")
         if isinstance(detections, Classifications):
             return frame
-        if self.roi != (0,0,1,1):
-            detections.compensate_for_roi(self.roi)
+        if self.roi != (0,0,1,1) and detections.bbox is not None:
+            detections.compensate_for_roi(self.roi)  # type: ignore[arg-type]
         # Draw bounding boxes and labels
         for i in range(len(detections)):
             try:
@@ -312,13 +312,8 @@ class OverlayStreamServer:
                     log.warning("ffmpeg process died, restarting")
                     self._restart_ffmpeg(self.encoder)
 
-                # Read shared state without locking.
-                # Python reference reads are atomic under the GIL, so there is no
-                # risk of a partial/corrupt read. The detection thread holds
-                # frame_lock for 10 ms per frame (sleep inside the lock); acquiring
-                # it here would starve that loop and stall the camera pipeline.
                 latest_frame = self.get_latest_frame()
-                detections = self.get_current_detections()
+                detections = copy.deepcopy(self.get_current_detections())
                 labels = self.labels
 
                 # Check if frame is available
